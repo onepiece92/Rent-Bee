@@ -1,0 +1,585 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../../app/theme.dart';
+import '../../domain/bs_calendar.dart';
+import '../../domain/models.dart';
+import '../../domain/money.dart';
+import '../../state/ledger_provider.dart';
+import '../../state/settings_provider.dart';
+import '../sheets/unit_detail_sheet.dart';
+import '../widgets/glass.dart';
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final _searchCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ledger = context.watch<LedgerProvider>();
+
+    return SafeArea(
+      bottom: false,
+      child: RefreshIndicator(
+        onRefresh: ledger.refresh,
+        color: Brand.orange,
+        backgroundColor: Brand.navy,
+        child: CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(child: _Header(ledger: ledger)),
+            SliverToBoxAdapter(child: _SummaryCard(summary: ledger.summary)),
+            SliverToBoxAdapter(
+              child: _SearchAndFilter(ledger: ledger, controller: _searchCtrl),
+            ),
+            if (ledger.loading)
+              const SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (ledger.visibleRows.isEmpty)
+              const SliverFillRemaining(hasScrollBody: false, child: _Empty())
+            else
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(14, 6, 14, 120),
+                sliver: SliverList.separated(
+                  itemCount: ledger.visibleRows.length,
+                  separatorBuilder: (_, i) => const SizedBox(height: 9),
+                  itemBuilder: (context, i) =>
+                      _UnitTile(row: ledger.visibleRows[i]),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Header extends StatelessWidget {
+  final LedgerProvider ledger;
+  const _Header({required this.ledger});
+
+  @override
+  Widget build(BuildContext context) {
+    final mode = context.watch<SettingsProvider>().calendar;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(9),
+                child: Image.asset(
+                  'assets/icon/rent_bee.png',
+                  width: 28,
+                  height: 28,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              const SizedBox(width: 9),
+              const Text(
+                'Rent Bee',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
+                ),
+              ),
+              const Spacer(),
+              // Today's date, in the active calendar.
+              _TodayChip(mode: mode),
+            ],
+          ),
+          const SizedBox(height: 14),
+          // Month switcher as a full-width glass nav bar.
+          GlassPanel(
+            padding: const EdgeInsets.all(6),
+            borderRadius: BorderRadius.circular(16),
+            child: Row(
+              children: [
+                _NavBtn(icon: Icons.chevron_left, onTap: ledger.previousMonth),
+                Expanded(
+                  child: Column(
+                    children: [
+                      Text(
+                        ledger.month.monthNameIn(mode),
+                        style: display(
+                          fontSize: 19,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        '${ledger.month.yearIn(mode)}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Brand.muted,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                _NavBtn(icon: Icons.chevron_right, onTap: ledger.nextMonth),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Small pill in the header showing today's date in the active calendar.
+class _TodayChip extends StatelessWidget {
+  final CalendarMode mode;
+  const _TodayChip({required this.mode});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: Brand.glassBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.today, size: 13, color: Brand.orangeSoft),
+          const SizedBox(width: 5),
+          Text(
+            todayLabel(mode),
+            style: const TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: Brand.text,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NavBtn extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _NavBtn({required this.icon, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: SizedBox(
+        width: 40,
+        height: 40,
+        child: Icon(icon, size: 20, color: Brand.text),
+      ),
+    );
+  }
+}
+
+class _SummaryCard extends StatelessWidget {
+  final MonthSummary summary;
+  const _SummaryCard({required this.summary});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 8, 18, 4),
+      child: GlassPanel(
+        sheen: true,
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Collected this month',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: Brand.muted,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                Text(
+                  '${summary.percent}%',
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: Brand.orangeWarm,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              Money.format(summary.collected),
+              style: display(
+                fontSize: 37,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -0.7,
+                fontFeatures: tabularNums,
+              ),
+            ),
+            const SizedBox(height: 1),
+            Text(
+              'of ${Money.format(summary.expected)} expected',
+              style: const TextStyle(fontSize: 12.5, color: Color(0xB3E2E6FF)),
+            ),
+            const SizedBox(height: 14),
+            BrandProgressBar(value: summary.progress),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                _StatChip(
+                  icon: Icons.check_circle,
+                  iconColor: Brand.paidText,
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: '${summary.paidCount}',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        TextSpan(text: '/${summary.activeCount} paid'),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                _StatChip(
+                  icon: Icons.schedule,
+                  iconColor: Brand.orangeWarm,
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: Money.format(summary.pending),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontFeatures: tabularNums,
+                          ),
+                        ),
+                        const TextSpan(text: ' pending'),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatChip extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final Widget child;
+  const _StatChip({
+    required this.icon,
+    required this.iconColor,
+    required this.child,
+  });
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 14, color: iconColor),
+            const SizedBox(width: 6),
+            Flexible(
+              child: DefaultTextStyle.merge(
+                style: const TextStyle(fontSize: 12.5, color: Brand.text),
+                child: child,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchAndFilter extends StatelessWidget {
+  final LedgerProvider ledger;
+  final TextEditingController controller;
+  const _SearchAndFilter({required this.ledger, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
+      child: Column(
+        children: [
+          GlassPanel(
+            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+            borderRadius: BorderRadius.circular(14),
+            child: Row(
+              children: [
+                const Icon(Icons.search, size: 16, color: Brand.muted),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    onChanged: ledger.setQuery,
+                    style: const TextStyle(fontSize: 14.5, color: Brand.text),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: InputBorder.none,
+                      hintText: 'Search tenant or unit…',
+                      hintStyle: TextStyle(
+                        color: Color(0x66FFFFFF),
+                        fontSize: 14.5,
+                      ),
+                    ),
+                  ),
+                ),
+                if (ledger.query.isNotEmpty)
+                  InkWell(
+                    onTap: () {
+                      controller.clear();
+                      ledger.setQuery('');
+                    },
+                    child: const Icon(
+                      Icons.close,
+                      size: 15,
+                      color: Brand.muted,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 11),
+          Row(
+            children: [
+              for (final f in LedgerFilter.values)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: _FilterChip(
+                    label: switch (f) {
+                      LedgerFilter.all => 'All',
+                      LedgerFilter.pending => 'Pending',
+                      LedgerFilter.paid => 'Paid',
+                    },
+                    selected: ledger.filter == f,
+                    onTap: () => ledger.setFilter(f),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _FilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(99),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? Brand.orange : Brand.glassBg,
+          borderRadius: BorderRadius.circular(99),
+          border: Border.all(
+            color: selected ? const Color(0xB3FF9A4D) : Brand.glassBorder,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : const Color(0xB3FFFFFF),
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _UnitTile extends StatelessWidget {
+  final UnitRow row;
+  const _UnitTile({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = row.unit;
+    final paid = row.isPaid;
+    return GlassPanel(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      borderRadius: BorderRadius.circular(18),
+      onTap: () => UnitDetailSheet.show(context, s.id),
+      child: Row(
+        children: [
+          CodeAvatar(code: s.code, paid: paid),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  s.tenantName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.1,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  s.businessType.isEmpty ? '—' : s.businessType,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Brand.muted, fontSize: 12.5),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                Money.format(s.monthlyRent),
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: tabularNums,
+                ),
+              ),
+              const SizedBox(height: 6),
+              switch (row.status) {
+                PayStatus.paid => const StatusPill(paid: true),
+                PayStatus.partial => _PartialPill(remaining: row.remaining),
+                PayStatus.pending => _MarkPaidPill(
+                  onTap: () => context.read<LedgerProvider>().markPaid(s),
+                ),
+              },
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Amber chip for a partially-paid unit, showing the remaining balance.
+class _PartialPill extends StatelessWidget {
+  final int remaining;
+  const _PartialPill({required this.remaining});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+      decoration: BoxDecoration(
+        color: Brand.orangeWarm.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: Brand.orangeWarm.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.timelapse, size: 12, color: Brand.orangeWarm),
+          const SizedBox(width: 4),
+          Text(
+            '${Money.format(remaining)} left',
+            style: const TextStyle(
+              color: Brand.orangeWarm,
+              fontWeight: FontWeight.w700,
+              fontSize: 11.5,
+              fontFeatures: tabularNums,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// "Mark paid" pill = dimmed translucent orange (softer than solid CTAs).
+class _MarkPaidPill extends StatelessWidget {
+  final VoidCallback onTap;
+  const _MarkPaidPill({required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(99),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+        decoration: BoxDecoration(
+          color: Brand.pillBg,
+          borderRadius: BorderRadius.circular(99),
+          border: Border.all(color: Brand.pillBorder),
+        ),
+        child: const Text(
+          'Mark paid',
+          style: TextStyle(
+            color: Brand.orangeSoft,
+            fontWeight: FontWeight.w700,
+            fontSize: 11.5,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Empty extends StatelessWidget {
+  const _Empty();
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.all(40),
+      child: Center(
+        child: Text(
+          'No units match.',
+          style: TextStyle(color: Brand.muted, fontSize: 14),
+        ),
+      ),
+    );
+  }
+}

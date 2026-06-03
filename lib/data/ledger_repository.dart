@@ -1,0 +1,573 @@
+import 'package:csv/csv.dart';
+import 'package:drift/drift.dart';
+
+import '../domain/bs_calendar.dart';
+import '../domain/models.dart';
+import 'database.dart';
+
+/// All persistence + business logic (§4) lives here, on top of Drift.
+class LedgerRepository {
+  final AppDatabase db;
+  LedgerRepository(this.db);
+
+  // ---- Units ----------------------------------------------------------
+
+  Future<List<Unit>> allUnits() => db.select(db.units).get();
+
+  Future<int> createUnit(UnitsCompanion entry) =>
+      db.into(db.units).insert(entry);
+
+  Future<void> updateUnit(Unit unit) =>
+      db.update(db.units).replace(unit);
+
+  /// Deleting a unit cascades its payment history.
+  Future<void> deleteUnit(int id) =>
+      (db.delete(db.units)..where((s) => s.id.equals(id))).go();
+
+  /// Applies the automatic annual rent increase. Each **active** unit with a
+  /// recorded `started_on` is raised by [percent]% on the **anniversary of its
+  /// rent-start BS month** — the same month, one year on, every year.
+  ///
+  /// Runs as a catch-up at app start: a unit is raised once for every full
+  /// anniversary that has passed since it started (or since its last raise),
+  /// compounding [percent]% per year (rounded to whole NPR each year). So a
+  /// unit started Jestha 2081 is raised in Jestha 2082, again in Jestha 2083,
+  /// and so on — and if the app wasn't opened for two years, both land at once.
+  /// Idempotent: re-running the same day changes nothing.
+  ///
+  /// No-op when [percent] <= 0, or for units that are inactive or have no start
+  /// date. Recorded payments are captured per record (§4), so history is
+  /// unaffected. Returns the number of units raised.
+  Future<int> applyAnniversaryRaises({
+    required double percent,
+    DateTime? asOf,
+  }) async {
+    if (percent <= 0) return 0;
+    final nowBs = bsYearMonth(asOf ?? DateTime.now());
+    final units = await allUnits();
+
+    final updated = <Unit>[];
+    for (final u in units) {
+      if (!u.isActive || u.startedOn == null) continue;
+      final startBs = bsYearMonth(u.startedOn!);
+      final anchorBs = bsYearMonth(u.lastRaisedOn ?? u.startedOn!);
+
+      // Latest BS year whose anniversary month (startBs.month) has arrived…
+      final latestAnniversaryYear =
+          nowBs.month >= startBs.month ? nowBs.year : nowBs.year - 1;
+      // …and the anniversary year already covered by the anchor.
+      final coveredThroughYear =
+          anchorBs.month >= startBs.month ? anchorBs.year : anchorBs.year - 1;
+
+      final dueYears = latestAnniversaryYear - coveredThroughYear;
+      if (dueYears <= 0) continue;
+
+      var rent = u.monthlyRent;
+      for (var i = 0; i < dueYears; i++) {
+        rent = ((rent * (100 + percent)) / 100).round();
+      }
+      // Stamp the latest applied anniversary (1st of the BS start month).
+      final stamp = adForBsMonthStart(latestAnniversaryYear, startBs.month);
+      updated.add(u.copyWith(monthlyRent: rent, lastRaisedOn: Value(stamp)));
+    }
+
+    if (updated.isNotEmpty) {
+      await db.batch((b) {
+        for (final u in updated) {
+          b.replace(db.units, u);
+        }
+      });
+    }
+    return updated.length;
+  }
+
+  // ---- Payments ----------------------------------------------------------
+
+  Future<List<Payment>> paymentsForMonth(int year, int month) {
+    return (db.select(db.payments)
+          ..where((p) => p.year.equals(year) & p.month.equals(month)))
+        .get();
+  }
+
+  /// Payments for an inclusive BS month range within a single year
+  /// (Baishakh=1 … Chaitra=12). Used by quarter/year reporting.
+  Future<List<Payment>> paymentsForRange(
+      int year, int startMonth, int endMonth) {
+    return (db.select(db.payments)
+          ..where((p) =>
+              p.year.equals(year) &
+              p.month.isBetweenValues(startMonth, endMonth)))
+        .get();
+  }
+
+  /// Units joined with their payment (if any) for the month, sorted
+  /// pending-first then paid (§4 "List sort").
+  Future<List<UnitRow>> rowsForMonth(int year, int month) async {
+    final units = await allUnits();
+    final payments = await paymentsForMonth(year, month);
+    final byUnit = {for (final p in payments) p.unitId: p};
+
+    final rows = [
+      for (final s in units)
+        UnitRow(unit: s, payment: byUnit[s.id]),
+    ];
+
+    rows.sort((a, b) {
+      // pending (false) before paid (true)
+      if (a.isPaid != b.isPaid) return a.isPaid ? 1 : -1;
+      return a.unit.code.compareTo(b.unit.code);
+    });
+    return rows;
+  }
+
+  /// Mark paid: upsert a payment row. amount defaults to the unit's
+  /// current monthly_rent (captured per record), paid_on = today, method = cash.
+  Future<void> markPaid(
+    Unit unit,
+    int year,
+    int month, {
+    int? amount,
+    DateTime? paidOn,
+    PayMethod method = PayMethod.cash,
+    String? note,
+  }) async {
+    await db.into(db.payments).insertOnConflictUpdate(
+          PaymentsCompanion.insert(
+            unitId: unit.id,
+            year: year,
+            month: month,
+            amount: amount ?? unit.monthlyRent,
+            paidOn: Value(paidOn ?? DateTime.now()),
+            method: Value(method),
+            note: Value(note),
+          ),
+        );
+  }
+
+  /// Update an existing payment record's editable fields.
+  Future<void> updatePayment(Payment payment) =>
+      db.update(db.payments).replace(payment);
+
+  /// Undo: delete the row for (unit_id, year, month).
+  Future<void> undo(int unitId, int year, int month) {
+    return (db.delete(db.payments)
+          ..where((p) =>
+              p.unitId.equals(unitId) &
+              p.year.equals(year) &
+              p.month.equals(month)))
+        .go();
+  }
+
+  // ---- Reporting ---------------------------------------------------------
+
+  Future<MonthSummary> summary(int year, int month) async {
+    final units = await allUnits();
+    final active = units.where((s) => s.isActive).toList();
+    final payments = await paymentsForMonth(year, month);
+    final rentById = {for (final s in active) s.id: s.monthlyRent};
+
+    // Amount recorded per active unit (one row per month; fold defensively).
+    final paidById = <int, int>{};
+    for (final p in payments) {
+      if (rentById.containsKey(p.unitId)) {
+        paidById[p.unitId] = (paidById[p.unitId] ?? 0) + p.amount;
+      }
+    }
+
+    final expected = active.fold<int>(0, (sum, s) => sum + s.monthlyRent);
+    final collected = paidById.values.fold<int>(0, (a, b) => a + b);
+    var paidCount = 0;
+    var partialCount = 0;
+    paidById.forEach((id, amt) {
+      if (amt <= 0) return;
+      if (amt >= (rentById[id] ?? 0)) {
+        paidCount++;
+      } else {
+        partialCount++;
+      }
+    });
+
+    return MonthSummary(
+      expected: expected,
+      collected: collected,
+      paidCount: paidCount,
+      partialCount: partialCount,
+      activeCount: active.length,
+    );
+  }
+
+  /// Aggregated totals for an inclusive BS month range within one year.
+  /// Works for any span: a single month (start == end) behaves like
+  /// [summary], a quarter (3 months), or a full year (1–12).
+  Future<PeriodSummary> periodSummary(
+      int year, int startMonth, int endMonth) async {
+    final units = await allUnits();
+    final active = units.where((s) => s.isActive).toList();
+    final activeIds = {for (final s in active) s.id};
+    final payments = (await paymentsForRange(year, startMonth, endMonth))
+        .where((p) => activeIds.contains(p.unitId))
+        .toList();
+
+    final monthlyExpected =
+        active.fold<int>(0, (sum, s) => sum + s.monthlyRent);
+    final span = endMonth - startMonth + 1;
+
+    // Per-month breakdown.
+    final buckets = <MonthBucket>[];
+    for (var m = startMonth; m <= endMonth; m++) {
+      final collected = payments
+          .where((p) => p.month == m)
+          .fold<int>(0, (sum, p) => sum + p.amount);
+      buckets.add(MonthBucket(
+        year: year,
+        month: m,
+        expected: monthlyExpected,
+        collected: collected,
+      ));
+    }
+
+    // Amount paid per (unit, month) — partial payments included.
+    final paidByUnitMonth = <int, Map<int, int>>{};
+    for (final p in payments) {
+      final byMonth = (paidByUnitMonth[p.unitId] ??= <int, int>{});
+      byMonth[p.month] = (byMonth[p.month] ?? 0) + p.amount;
+    }
+
+    // Outstanding per unit + count of fully-settled (unit, month) slots.
+    // Owed is the true shortfall (rent − paid) summed over the period, so a
+    // partially-paid month contributes its remainder rather than all-or-nothing.
+    final outstanding = <PeriodDebt>[];
+    var paidSlots = 0;
+    for (final s in active) {
+      final byMonth = paidByUnitMonth[s.id] ?? const <int, int>{};
+      var owed = 0;
+      var monthsUnpaid = 0;
+      for (var m = startMonth; m <= endMonth; m++) {
+        final paid = byMonth[m] ?? 0;
+        if (paid >= s.monthlyRent) {
+          paidSlots++;
+        } else {
+          owed += s.monthlyRent - paid; // counts full or partial shortfall
+          monthsUnpaid++;
+        }
+      }
+      if (owed > 0) {
+        outstanding.add(PeriodDebt(
+          unit: s,
+          amountOwed: owed,
+          monthsUnpaid: monthsUnpaid,
+        ));
+      }
+    }
+    outstanding.sort((a, b) {
+      final byAmount = b.amountOwed.compareTo(a.amountOwed);
+      return byAmount != 0 ? byAmount : a.unit.code.compareTo(b.unit.code);
+    });
+
+    return PeriodSummary(
+      expected: monthlyExpected * span,
+      collected: payments.fold<int>(0, (sum, p) => sum + p.amount),
+      paidSlots: paidSlots,
+      totalSlots: active.length * span,
+      months: buckets,
+      outstanding: outstanding,
+    );
+  }
+
+  /// Recent paid/unpaid per month for a unit, newest first.
+  Future<List<HistoryEntry>> history(int unitId, BsMonth from,
+      {int months = 6}) async {
+    final entries = <HistoryEntry>[];
+    var cursor = from;
+    for (var i = 0; i < months; i++) {
+      final rows = (await (db.select(db.payments)
+            ..where((p) =>
+                p.unitId.equals(unitId) &
+                p.year.equals(cursor.year) &
+                p.month.equals(cursor.month)))
+          .get());
+      final paid = rows.isNotEmpty;
+      entries.add(HistoryEntry(
+        year: cursor.year,
+        month: cursor.month,
+        paid: paid,
+        amount: paid ? rows.first.amount : null,
+      ));
+      cursor = cursor.previous();
+    }
+    return entries;
+  }
+
+  /// CSV of the month: unit, tenant, rent, status, paid_on, method.
+  Future<String> exportCsv(int year, int month) async {
+    final rows = await rowsForMonth(year, month);
+    final buf = StringBuffer()
+      ..writeln('code,tenant,rent,status,paid_on,method,amount');
+    for (final r in rows) {
+      final s = r.unit;
+      final p = r.payment;
+      final paidOn = p?.paidOn?.toIso8601String().split('T').first ?? '';
+      final method = p?.method.name ?? '';
+      final amount = p?.amount.toString() ?? '';
+      buf.writeln([
+        _csv(s.code),
+        _csv(s.tenantName),
+        s.monthlyRent,
+        _statusLabel(r),
+        paidOn,
+        method,
+        amount,
+      ].join(','));
+    }
+    return buf.toString();
+  }
+
+  /// CSV across an inclusive BS month range, one row per (unit, month),
+  /// with a leading month column. Single-month ranges still work.
+  Future<String> exportCsvRange(
+      int year, int startMonth, int endMonth) async {
+    final buf = StringBuffer()
+      ..writeln('month,code,tenant,rent,status,paid_on,method,amount');
+    for (var m = startMonth; m <= endMonth; m++) {
+      final rows = await rowsForMonth(year, m);
+      final monthLabel = BsCalendar.label(m);
+      for (final r in rows) {
+        final s = r.unit;
+        final p = r.payment;
+        final paidOn = p?.paidOn?.toIso8601String().split('T').first ?? '';
+        final method = p?.method.name ?? '';
+        final amount = p?.amount.toString() ?? '';
+        buf.writeln([
+          _csv(monthLabel),
+          _csv(s.code),
+          _csv(s.tenantName),
+          s.monthlyRent,
+          _statusLabel(r),
+          paidOn,
+          method,
+          amount,
+        ].join(','));
+      }
+    }
+    return buf.toString();
+  }
+
+  static String _csv(String v) {
+    if (v.contains(',') || v.contains('"') || v.contains('\n')) {
+      return '"${v.replaceAll('"', '""')}"';
+    }
+    return v;
+  }
+
+  static String _statusLabel(UnitRow r) => switch (r.status) {
+        PayStatus.paid => 'paid',
+        PayStatus.partial => 'partial',
+        PayStatus.pending => 'pending',
+      };
+
+  // ---- Import ------------------------------------------------------------
+
+  /// Merges a CSV in Rent Bee's export format into the ledger:
+  ///   • units are upserted by `code` (new ones created, existing ones get
+  ///     their tenant/rent updated), and
+  ///   • paid/partial rows become payments, upserted by (unit, month).
+  ///
+  /// Recognised columns (case-insensitive header, order-independent): code*,
+  /// tenant, rent, month, status, paid_on, method, amount, year. The BS year
+  /// comes from a `year` column if present, otherwise [fallbackYear] (the
+  /// export omits year, so single-year files import into the selected year).
+  /// Existing data not referenced by the file is left untouched. Returns the
+  /// number of units added/updated and payments written.
+  Future<({int unitsAdded, int unitsUpdated, int payments})> importCsv(
+    String content, {
+    required int fallbackYear,
+  }) async {
+    final table = const CsvToListConverter(eol: '\n', shouldParseNumbers: false)
+        .convert(content.replaceAll('\r\n', '\n').replaceAll('\r', '\n'));
+    if (table.length < 2) {
+      return (unitsAdded: 0, unitsUpdated: 0, payments: 0);
+    }
+
+    final header =
+        table.first.map((e) => e.toString().trim().toLowerCase()).toList();
+    int col(String name) => header.indexOf(name);
+    final iYear = col('year'),
+        iMonth = col('month'),
+        iCode = col('code'),
+        iTenant = col('tenant'),
+        iRent = col('rent'),
+        iStatus = col('status'),
+        iPaidOn = col('paid_on'),
+        iMethod = col('method'),
+        iAmount = col('amount');
+    if (iCode < 0) {
+      throw const FormatException('CSV is missing a "code" column.');
+    }
+
+    final byCode = {for (final u in await allUnits()) u.code: u};
+    var unitsAdded = 0, unitsUpdated = 0, payments = 0;
+
+    for (var r = 1; r < table.length; r++) {
+      final row = table[r];
+      String cell(int i) =>
+          (i >= 0 && i < row.length) ? row[i].toString().trim() : '';
+      final code = cell(iCode);
+      if (code.isEmpty) continue;
+      final tenant = cell(iTenant);
+      final rent = int.tryParse(cell(iRent));
+
+      // Upsert the unit (idempotent across this unit's repeated month rows).
+      int unitId;
+      final existing = byCode[code];
+      if (existing != null) {
+        unitId = existing.id;
+        final updated = existing.copyWith(
+          tenantName: tenant.isEmpty ? existing.tenantName : tenant,
+          monthlyRent:
+              (rent == null || rent < 0) ? existing.monthlyRent : rent,
+        );
+        if (updated != existing) {
+          await updateUnit(updated);
+          byCode[code] = updated;
+          unitsUpdated++;
+        }
+      } else {
+        unitId = await createUnit(UnitsCompanion.insert(
+          code: code,
+          tenantName: tenant.isEmpty ? '(imported)' : tenant,
+          monthlyRent: (rent == null || rent < 0) ? 0 : rent,
+        ));
+        // Cache it so later rows for the same code don't re-create it.
+        byCode[code] = await (db.select(db.units)
+              ..where((u) => u.id.equals(unitId)))
+            .getSingle();
+        unitsAdded++;
+      }
+
+      // Upsert the payment for settled/partial rows carrying an amount.
+      final status = cell(iStatus).toLowerCase();
+      final amount = int.tryParse(cell(iAmount));
+      final monthNum = _monthNumber(cell(iMonth));
+      if (monthNum != null &&
+          amount != null &&
+          amount > 0 &&
+          status != 'pending') {
+        await db.into(db.payments).insertOnConflictUpdate(
+              PaymentsCompanion.insert(
+                unitId: unitId,
+                year: int.tryParse(cell(iYear)) ?? fallbackYear,
+                month: monthNum,
+                amount: amount,
+                paidOn: Value(DateTime.tryParse(cell(iPaidOn))),
+                method: Value(_method(cell(iMethod))),
+              ),
+            );
+        payments++;
+      }
+    }
+    return (
+      unitsAdded: unitsAdded,
+      unitsUpdated: unitsUpdated,
+      payments: payments
+    );
+  }
+
+  /// BS month from a cell that is either a 1–12 number or a month name.
+  static int? _monthNumber(String s) {
+    if (s.isEmpty) return null;
+    final n = int.tryParse(s);
+    if (n != null) return (n >= 1 && n <= 12) ? n : null;
+    final i = BsCalendar.monthLabels
+        .indexWhere((m) => m.toLowerCase() == s.toLowerCase());
+    return i < 0 ? null : i + 1;
+  }
+
+  static PayMethod _method(String s) {
+    for (final m in PayMethod.values) {
+      if (m.name.toLowerCase() == s.toLowerCase()) return m;
+    }
+    return PayMethod.cash;
+  }
+
+  // ---- Seed / demo / reset -----------------------------------------------
+
+  /// Sample units: [code, tenant, business, monthlyRent, phone].
+  static const _demoUnits = [
+    ['A-01', 'Rajesh Shrestha', 'Tea & Snacks', 18000, '9801234501'],
+    ['A-02', 'Anjali Thapa', 'Tailoring', 15000, '9801234502'],
+    ['A-03', 'Bikash Gurung', 'Mobile Repair', 22000, '9801234503'],
+    ['A-04', 'Sita Magar', 'Beauty Parlour', 20000, '9801234504'],
+    ['B-01', 'Hari Adhikari', 'Stationery', 16000, '9801234505'],
+    ['B-02', 'Maya Tamang', 'Grocery', 25000, '9801234506'],
+    ['B-03', 'Deepak Rai', 'Hardware', 28000, '9801234507'],
+    ['B-04', 'Sunita K.C.', 'Clothing', 24000, '9801234508'],
+    ['C-01', 'Ramesh Poudel', 'Pharmacy', 30000, '9801234509'],
+    ['C-02', 'Gita Bhandari', 'Bakery', 19000, '9801234510'],
+  ];
+
+  Future<void> _insertDemoUnits() {
+    final now = DateTime.now();
+    // Varied rent-start dates (months ago) so the annual-raise gate is visible:
+    // the two units started < 12 months ago (9mo, 6mo) are skipped by a raise.
+    const monthsAgo = [24, 18, 14, 9, 30, 20, 6, 16, 26, 13];
+    return db.batch((b) {
+      for (var i = 0; i < _demoUnits.length; i++) {
+        final s = _demoUnits[i];
+        b.insert(
+          db.units,
+          UnitsCompanion.insert(
+            code: s[0] as String,
+            tenantName: s[1] as String,
+            businessType: Value(s[2] as String),
+            monthlyRent: s[3] as int,
+            phone: Value(s[4] as String),
+            startedOn:
+                Value(DateTime(now.year, now.month - monthsAgo[i], now.day)),
+          ),
+        );
+      }
+    });
+  }
+
+  /// Inserts the sample units on first run (idempotent: skips if any exist).
+  Future<void> seedIfEmpty() async {
+    final existing = await db.select(db.units).get();
+    if (existing.isNotEmpty) return;
+    await _insertDemoUnits();
+  }
+
+  /// Replaces all data with a populated demo dataset: the sample units plus a
+  /// realistic spread of payments across [anchor] and the three prior BS
+  /// months (~70% collected), so the ledger and reports look lived-in.
+  Future<void> generateDemoData(BsMonth anchor) async {
+    await eraseAll();
+    await _insertDemoUnits();
+    final units = await allUnits();
+
+    final payments = <PaymentsCompanion>[];
+    final now = DateTime.now();
+    var cursor = anchor;
+    for (var monthBack = 0; monthBack < 4; monthBack++) {
+      for (var j = 0; j < units.length; j++) {
+        // Deterministic ~70% paid, varied per unit and month.
+        if ((j * 7 + monthBack * 3) % 10 >= 7) continue;
+        final u = units[j];
+        payments.add(PaymentsCompanion.insert(
+          unitId: u.id,
+          year: cursor.year,
+          month: cursor.month,
+          amount: u.monthlyRent,
+          paidOn: Value(now),
+        ));
+      }
+      cursor = cursor.previous();
+    }
+    await db.batch((b) => b.insertAll(db.payments, payments));
+  }
+
+  /// Deletes every payment and unit. Irreversible.
+  Future<void> eraseAll() async {
+    await db.delete(db.payments).go();
+    await db.delete(db.units).go();
+  }
+}
