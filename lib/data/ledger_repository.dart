@@ -131,18 +131,30 @@ class LedgerRepository {
     PayMethod method = PayMethod.cash,
     String? note,
   }) async {
-    await db.into(db.payments).insertOnConflictUpdate(
-          PaymentsCompanion.insert(
-            unitId: unit.id,
-            year: year,
-            month: month,
-            amount: amount ?? unit.monthlyRent,
-            paidOn: Value(paidOn ?? DateTime.now()),
-            method: Value(method),
-            note: Value(note),
-          ),
-        );
+    await _upsertPayment(PaymentsCompanion.insert(
+      unitId: unit.id,
+      year: year,
+      month: month,
+      amount: amount ?? unit.monthlyRent,
+      paidOn: Value(paidOn ?? DateTime.now()),
+      method: Value(method),
+      note: Value(note),
+    ));
   }
+
+  /// Insert-or-update a payment keyed by its `(unit, year, month)` unique index.
+  /// Drift's [insertOnConflictUpdate] only targets the primary key (`id`), which
+  /// we never supply here — so it would always INSERT and trip the unique index
+  /// (SqliteException 2067). Naming the unique columns as the conflict target
+  /// makes the upsert behave as documented.
+  Future<void> _upsertPayment(PaymentsCompanion entry) =>
+      db.into(db.payments).insert(
+            entry,
+            onConflict: DoUpdate(
+              (_) => entry,
+              target: [db.payments.unitId, db.payments.year, db.payments.month],
+            ),
+          );
 
   /// Update an existing payment record's editable fields.
   Future<void> updatePayment(Payment payment) =>
@@ -452,16 +464,14 @@ class LedgerRepository {
           amount != null &&
           amount > 0 &&
           status != 'pending') {
-        await db.into(db.payments).insertOnConflictUpdate(
-              PaymentsCompanion.insert(
-                unitId: unitId,
-                year: int.tryParse(cell(iYear)) ?? fallbackYear,
-                month: monthNum,
-                amount: amount,
-                paidOn: Value(DateTime.tryParse(cell(iPaidOn))),
-                method: Value(_method(cell(iMethod))),
-              ),
-            );
+        await _upsertPayment(PaymentsCompanion.insert(
+          unitId: unitId,
+          year: int.tryParse(cell(iYear)) ?? fallbackYear,
+          month: monthNum,
+          amount: amount,
+          paidOn: Value(DateTime.tryParse(cell(iPaidOn))),
+          method: Value(_method(cell(iMethod))),
+        ));
         payments++;
       }
     }

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../../app/theme.dart';
 import '../../domain/bs_calendar.dart';
@@ -8,6 +7,7 @@ import '../../domain/models.dart';
 import '../../domain/money.dart';
 import '../../state/ledger_provider.dart';
 import '../../state/settings_provider.dart';
+import '../util/csv_share.dart';
 import '../widgets/glass.dart';
 import '../widgets/toast.dart';
 
@@ -115,17 +115,23 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   Future<void> _exportCsv() async {
     final overlay = Overlay.of(context, rootOverlay: true); // capture pre-await
+    final origin = _shareOrigin(context);
     final (start, end) = _range;
     try {
       final csv =
           await _ledger.repo.exportCsvRange(_anchor.year, start, end);
       final name = 'unit-ledger-${_anchor.year}-${_exportSuffix(start)}.csv';
-      await SharePlus.instance.share(
-        ShareParams(text: csv, subject: name, fileNameOverrides: [name]),
-      );
+      await shareCsv(csv, name, origin: origin);
     } catch (e) {
       showToastOn(overlay, 'Export failed: $e', error: true);
     }
+  }
+
+  /// Global rect of this screen, used to anchor the share popover on iPad/macOS.
+  Rect? _shareOrigin(BuildContext context) {
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return null;
+    return box.localToGlobal(Offset.zero) & box.size;
   }
 
   String _exportSuffix(int start) => switch (_scope) {

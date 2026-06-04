@@ -4,7 +4,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../../app/theme.dart';
 import '../../domain/bs_calendar.dart';
@@ -12,6 +11,7 @@ import '../../domain/money.dart';
 import '../../state/auth_provider.dart';
 import '../../state/ledger_provider.dart';
 import '../../state/settings_provider.dart';
+import '../util/csv_share.dart';
 import '../widgets/glass.dart';
 import '../widgets/toast.dart';
 
@@ -260,12 +260,14 @@ class SettingsScreen extends StatelessWidget {
     final ledger = context.read<LedgerProvider>();
     final overlay = Overlay.of(context, rootOverlay: true);
     final year = ledger.month.year;
+    final box = context.findRenderObject();
+    final origin = (box is RenderBox && box.hasSize)
+        ? box.localToGlobal(Offset.zero) & box.size
+        : null;
     try {
       final csv = await ledger.repo.exportCsvRange(year, 1, 12);
       final name = 'rent-bee-$year-full.csv';
-      await SharePlus.instance.share(
-        ShareParams(text: csv, subject: name, fileNameOverrides: [name]),
-      );
+      await shareCsv(csv, name, origin: origin);
     } catch (e) {
       showToastOn(overlay, 'Export failed: $e', error: true);
     }
