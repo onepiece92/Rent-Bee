@@ -67,7 +67,7 @@ class LedgerProvider extends ChangeNotifier {
   int get activeUnitCount =>
       _rows.where((r) => r.unit.isActive).length;
 
-  /// Applies any due automatic rent increases (see
+  /// Applies any due automatic lease escalations (see
   /// [LedgerRepository.applyAnniversaryRaises]) at [annualRaisePercent], then
   /// loads the current month. Called once at startup. The ledger starts **empty**
   /// on a fresh install — demo data is opt-in via Settings → Generate demo data.
@@ -203,7 +203,7 @@ class LedgerProvider extends ChangeNotifier {
     return res;
   }
 
-  /// Applies any now-due automatic anniversary rent increases at [percent]%
+  /// Applies any now-due automatic anniversary lease escalations at [percent]%
   /// (used when the owner changes the rate so the effect is immediate; startup
   /// applies them via [init]). Returns the number of units raised.
   Future<int> applyDueRaises(double percent) async {

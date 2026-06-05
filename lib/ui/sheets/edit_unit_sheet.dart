@@ -39,7 +39,7 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
   late final TextEditingController _phone;
   late final TextEditingController _deposit;
   late bool _active;
-  // When the tenant joined / rent started — anchors the annual rent increase.
+  // When the tenant joined / rent started — anchors the annual lease escalation.
   // New units default to today; existing units keep whatever was set (may null).
   DateTime? _startedOn;
 
@@ -115,6 +115,7 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final ledger = context.read<LedgerProvider>();
+    final raisePct = context.read<SettingsProvider>().annualRaisePercent;
     final rent = int.tryParse(_rent.text.trim()) ?? 0;
     final cleanedPhone = normalizePhone(_phone.text);
     final phone = cleanedPhone.isEmpty ? null : cleanedPhone;
@@ -145,6 +146,9 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
           startedOn: Value(_startedOn),
           depositAmount: Value(deposit),
         ));
+        // The entered rent is the rent at the start date — grow it to today by
+        // applying any due anniversary increases now (not just on next launch).
+        if (raisePct > 0) await ledger.applyDueRaises(raisePct);
       }
       if (mounted) Navigator.of(context).pop();
     } catch (_) {

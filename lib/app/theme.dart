@@ -110,7 +110,7 @@ ThemeData buildTheme() {
         borderSide: BorderSide(color: Brand.orange, width: 2),
       ),
     ),
-    // Brand pills for ChoiceChip (the rent-raise preset chips).
+    // Brand pills for ChoiceChip (the lease-escalation preset chips).
     chipTheme: ChipThemeData(
       backgroundColor: Brand.glassBg,
       selectedColor: Brand.orange,

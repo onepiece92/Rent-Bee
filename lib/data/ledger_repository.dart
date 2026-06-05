@@ -24,7 +24,7 @@ class LedgerRepository {
   Future<void> deleteUnit(int id) =>
       (db.delete(db.units)..where((s) => s.id.equals(id))).go();
 
-  /// Applies the automatic annual rent increase. Each **active** unit with a
+  /// Applies the automatic annual lease escalation. Each **active** unit with a
   /// recorded `started_on` is raised by [percent]% on the **anniversary of its
   /// rent-start BS month** — the same month, one year on, every year.
   ///
@@ -578,7 +578,7 @@ class LedgerRepository {
   /// [anchor] (the selected month). Each unit starts [years] years back and its
   /// rent **grows on every anniversary** by [annualRaisePercent]% — so each
   /// month's payment is recorded at the rent that was in effect *that* BS year,
-  /// and the annual-increase feature is visible across history.
+  /// and the lease-escalation feature is visible across history.
   ///
   /// The stored `monthly_rent` is the latest compounded value, and `lastRaisedOn`
   /// is stamped at the current anniversary so the launch auto-raise is a no-op.

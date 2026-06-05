@@ -13,7 +13,10 @@ import '../util/sms_reminder.dart';
 import '../widgets/glass.dart';
 import '../widgets/glass_dialog.dart';
 import '../widgets/sheet_scaffold.dart';
+import 'charges_section.dart';
+import 'deposit_cell.dart';
 import 'edit_unit_sheet.dart';
+import 'sheet_buttons.dart';
 
 /// Bottom sheet: unit details, Collect/Undo for the selected month,
 /// edit/delete, and a 6-month history strip.
@@ -108,14 +111,14 @@ class UnitDetailSheet extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 11),
-        Row(children: [_DepositCell(unit: s)]),
+        Row(children: [DepositCell(unit: s)]),
         const SizedBox(height: 16),
 
         // big Collect / Undo button
         _BigToggleButton(unit: s, payment: row.payment, month: ledger.month),
 
         const SizedBox(height: 20),
-        _ChargesSection(unitId: s.id, month: ledger.month),
+        ChargesSection(unitId: s.id, month: ledger.month),
 
         const SizedBox(height: 20),
         const Text('Recent months',
@@ -216,7 +219,7 @@ class _BigToggleButton extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: _SecondaryButton(
+                  child: SecondaryButton(
                     icon: Icons.edit_outlined,
                     label: 'Edit amount',
                     onTap: () => _recordPartial(context, ledger),
@@ -224,7 +227,7 @@ class _BigToggleButton extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: _SecondaryButton(
+                  child: SecondaryButton(
                     icon: Icons.close,
                     label: 'Undo',
                     onTap: () => ledger.undo(unit.id),
@@ -259,7 +262,7 @@ class _BigToggleButton extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 10),
-            _SecondaryButton(
+            SecondaryButton(
               icon: Icons.pie_chart_outline,
               label: 'Record partial amount',
               onTap: () => _recordPartial(context, ledger),
@@ -317,44 +320,6 @@ class _BigToggleButton extends StatelessWidget {
     } else {
       await ledger.markPaid(unit, amount: result);
     }
-  }
-}
-
-/// Ghost button for secondary actions inside the sheet.
-class _SecondaryButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  const _SecondaryButton(
-      {required this.icon, required this.label, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Brand.glassBg,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Brand.glassBorder),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 15, color: Brand.orangeSoft),
-            const SizedBox(width: 6),
-            Text(label,
-                style: const TextStyle(
-                    color: Brand.orangeSoft,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13)),
-          ],
-        ),
-      ),
-    );
   }
 }
 
@@ -585,326 +550,6 @@ class _IconBtn extends StatelessWidget {
       onTap: onTap,
       child: SizedBox(
           width: 38, height: 38, child: Icon(icon, size: 16, color: Brand.text)),
-    );
-  }
-}
-
-/// Security-deposit cell: shows the held amount and whether it has been
-/// refunded, with a chip to flip between held and refunded. Hidden controls
-/// when no deposit is on file (amount 0).
-class _DepositCell extends StatelessWidget {
-  final Unit unit;
-  const _DepositCell({required this.unit});
-
-  @override
-  Widget build(BuildContext context) {
-    final ledger = context.read<LedgerProvider>();
-    final mode = context.watch<SettingsProvider>().calendar;
-    final has = unit.depositAmount > 0;
-    final refunded = unit.depositRefunded;
-    final sub = !has
-        ? null
-        : refunded
-            ? 'Refunded${unit.depositRefundedOn != null ? ' · ${dateLabel(unit.depositRefundedOn!, mode)}' : ''}'
-            : 'Held';
-
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: Brand.glassBg,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Brand.glassBorder),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Security deposit',
-                      style: TextStyle(
-                          fontSize: 11.5,
-                          color: Brand.muted,
-                          fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 3),
-                  Text(has ? Money.format(unit.depositAmount) : 'None',
-                      style: display(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          fontFeatures: tabularNums)),
-                  if (sub != null) ...[
-                    const SizedBox(height: 2),
-                    Text(sub,
-                        style: TextStyle(
-                            fontSize: 11.5,
-                            color:
-                                refunded ? Brand.muted : Brand.paidText,
-                            fontWeight: FontWeight.w600)),
-                  ],
-                ],
-              ),
-            ),
-            if (has)
-              InkWell(
-                onTap: () => _toggle(context, ledger),
-                borderRadius: BorderRadius.circular(10),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Brand.glassBg,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Brand.glassBorder),
-                  ),
-                  child: Text(refunded ? 'Mark held' : 'Refund',
-                      style: const TextStyle(
-                          color: Brand.orangeSoft,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12)),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _toggle(BuildContext context, LedgerProvider ledger) async {
-    final next = !unit.depositRefunded;
-    final ok = await showGlassDialog<bool>(
-      context,
-      (ctx) => GlassDialog(
-        title: next ? 'Refund deposit?' : 'Mark as held?',
-        content: Text(next
-            ? 'Mark the ${Money.format(unit.depositAmount)} deposit as '
-                'returned to ${unit.tenantName}.'
-            : 'Mark the ${Money.format(unit.depositAmount)} deposit as '
-                'currently held again.'),
-        actions: [
-          GlassDialogAction('Cancel',
-              onPressed: () => Navigator.pop(ctx, false)),
-          GlassDialogAction(next ? 'Refund' : 'Mark held',
-              primary: true, onPressed: () => Navigator.pop(ctx, true)),
-        ],
-      ),
-    );
-    if (ok == true) await ledger.setDepositRefunded(unit, next);
-  }
-}
-
-/// Variable per-month charges (electricity / water / service) for the unit,
-/// tracked separately from rent. Loads the selected month's row and offers an
-/// edit dialog. Reloads when the ledger changes or the month switches.
-class _ChargesSection extends StatefulWidget {
-  final int unitId;
-  final BsMonth month;
-  const _ChargesSection({required this.unitId, required this.month});
-
-  @override
-  State<_ChargesSection> createState() => _ChargesSectionState();
-}
-
-class _ChargesSectionState extends State<_ChargesSection> {
-  late final LedgerProvider _ledger;
-  late Future<Charge?> _future;
-  Charge? _last;
-
-  @override
-  void initState() {
-    super.initState();
-    _ledger = context.read<LedgerProvider>();
-    _future = _ledger.chargesFor(widget.unitId);
-    _ledger.addListener(_reload);
-  }
-
-  void _reload() {
-    if (mounted) {
-      setState(() => _future = _ledger.chargesFor(widget.unitId));
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _ChargesSection old) {
-    super.didUpdateWidget(old);
-    if (old.month != widget.month || old.unitId != widget.unitId) _reload();
-  }
-
-  @override
-  void dispose() {
-    _ledger.removeListener(_reload);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final mode = context.watch<SettingsProvider>().calendar;
-    return FutureBuilder<Charge?>(
-      future: _future,
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.done) _last = snap.data;
-        final c = snap.hasData ? snap.data : _last;
-        final e = c?.electricity ?? 0;
-        final w = c?.water ?? 0;
-        final s = c?.service ?? 0;
-        final total = e + w + s;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text('Charges · ${widget.month.monthNameIn(mode)}',
-                      style: const TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w700,
-                          color: Brand.muted,
-                          letterSpacing: 0.2)),
-                ),
-                _SecondaryButton(
-                  icon: Icons.edit_outlined,
-                  label: total == 0 ? 'Add' : 'Edit',
-                  onTap: () => _edit(c),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              decoration: BoxDecoration(
-                color: Brand.glassBg,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Brand.glassBorder),
-              ),
-              child: Column(
-                children: [
-                  _ChargeRow(
-                      icon: Icons.bolt_outlined,
-                      label: 'Electricity',
-                      amount: e),
-                  const _Hair(),
-                  _ChargeRow(
-                      icon: Icons.water_drop_outlined,
-                      label: 'Water',
-                      amount: w),
-                  const _Hair(),
-                  _ChargeRow(
-                      icon: Icons.handyman_outlined,
-                      label: 'Service / other',
-                      amount: s),
-                  const _Hair(),
-                  _ChargeRow(label: 'Total', amount: total, bold: true),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _edit(Charge? c) async {
-    String pre(int v) => v == 0 ? '' : v.toString();
-    final eCtrl = TextEditingController(text: pre(c?.electricity ?? 0));
-    final wCtrl = TextEditingController(text: pre(c?.water ?? 0));
-    final sCtrl = TextEditingController(text: pre(c?.service ?? 0));
-
-    final saved = await showGlassDialog<bool>(
-      context,
-      (ctx) => GlassDialog(
-        title: 'Charges · ${widget.month.monthName} ${widget.month.year}',
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _ChargeField(controller: eCtrl, label: 'Electricity'),
-            const SizedBox(height: 10),
-            _ChargeField(controller: wCtrl, label: 'Water'),
-            const SizedBox(height: 10),
-            _ChargeField(controller: sCtrl, label: 'Service / other'),
-          ],
-        ),
-        actions: [
-          GlassDialogAction('Cancel',
-              onPressed: () => Navigator.pop(ctx, false)),
-          GlassDialogAction('Save',
-              primary: true, onPressed: () => Navigator.pop(ctx, true)),
-        ],
-      ),
-    );
-    if (saved != true) return;
-    await _ledger.setCharges(
-      widget.unitId,
-      electricity: int.tryParse(eCtrl.text.trim()) ?? 0,
-      water: int.tryParse(wCtrl.text.trim()) ?? 0,
-      service: int.tryParse(sCtrl.text.trim()) ?? 0,
-    );
-  }
-}
-
-class _ChargeRow extends StatelessWidget {
-  final IconData? icon;
-  final String label;
-  final int amount;
-  final bool bold;
-  const _ChargeRow({
-    this.icon,
-    required this.label,
-    required this.amount,
-    this.bold = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
-        children: [
-          if (icon != null) ...[
-            Icon(icon, size: 15, color: Brand.muted),
-            const SizedBox(width: 8),
-          ] else
-            const SizedBox(width: 23),
-          Expanded(
-            child: Text(label,
-                style: TextStyle(
-                    fontSize: 13,
-                    color: bold ? Brand.text : Brand.muted,
-                    fontWeight: bold ? FontWeight.w700 : FontWeight.w500)),
-          ),
-          Text(amount == 0 && !bold ? '—' : Money.format(amount),
-              style: display(
-                  fontSize: bold ? 15 : 14,
-                  fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
-                  fontFeatures: tabularNums)),
-        ],
-      ),
-    );
-  }
-}
-
-class _Hair extends StatelessWidget {
-  const _Hair();
-  @override
-  Widget build(BuildContext context) =>
-      Divider(height: 1, thickness: 1, color: Brand.glassBorder);
-}
-
-class _ChargeField extends StatelessWidget {
-  final TextEditingController controller;
-  final String label;
-  const _ChargeField({required this.controller, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      keyboardType: TextInputType.number,
-      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-      decoration: InputDecoration(
-        labelText: label,
-        prefixText: 'Rs ',
-        isDense: true,
-      ),
     );
   }
 }

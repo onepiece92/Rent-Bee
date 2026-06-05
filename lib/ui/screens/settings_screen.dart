@@ -68,8 +68,8 @@ class SettingsScreen extends StatelessWidget {
             child: _SettingTile(
               icon: Icons.trending_up_rounded,
               title: settings.annualRaisePercent == 0
-                  ? 'Annual increase'
-                  : 'Annual increase · ${fmtPercent(settings.annualRaisePercent)}%',
+                  ? 'Annual Lease Escalation Rate'
+                  : 'Annual Lease Escalation Rate · ${fmtPercent(settings.annualRaisePercent)}%',
               subtitle: settings.annualRaisePercent == 0
                   ? 'Off — tap to auto-raise rent every year'
                   : 'Applied automatically on each unit\'s anniversary month',
@@ -303,9 +303,9 @@ class SettingsScreen extends StatelessWidget {
     showToastOn(overlay, 'All data erased');
   }
 
-  /// Bulk annual rent increase: raises every unit's monthly rent by [percent]%.
+  /// Bulk annual lease escalation: raises every unit's monthly rent by [percent]%.
   /// Past recorded payments are captured per record, so history is unchanged.
-  /// Sets the automatic annual-increase percentage (0 = off) and immediately
+  /// Sets the automatic annual lease escalation rate (0 = off) and immediately
   /// catches up any now-due anniversary raises at the new rate.
   Future<void> _editRaisePercent(BuildContext context) async {
     final settings = context.read<SettingsProvider>();
@@ -325,8 +325,8 @@ class SettingsScreen extends StatelessWidget {
     await settings.setAnnualRaisePercent(percent);
     final raised = percent > 0 ? await ledger.applyDueRaises(percent) : 0;
     final msg = percent == 0
-        ? 'Automatic rent increase turned off'
-        : 'Annual increase set to ${fmtPercent(percent)}%'
+        ? 'Annual Lease Escalation Rate turned off'
+        : 'Annual Lease Escalation Rate set to ${fmtPercent(percent)}%'
             '${raised > 0 ? ' · raised $raised unit${raised == 1 ? '' : 's'} now' : ''}';
     showToastOn(overlay, msg);
   }
@@ -419,7 +419,7 @@ class _CalendarToggle extends StatelessWidget {
 String fmtPercent(double p) =>
     p == p.truncateToDouble() ? p.toInt().toString() : p.toString();
 
-/// Dialog to set the automatic annual rent-increase percentage. Quick presets
+/// Dialog to set the automatic annual lease escalation rate. Quick presets
 /// plus a free-form field that accepts any rate, including fractions like 7.5.
 /// Pops the chosen percent (0 = off) or null on cancel.
 class _RaisePercentDialog extends StatefulWidget {
@@ -472,7 +472,7 @@ class _RaisePercentDialogState extends State<_RaisePercentDialog> {
     }
 
     return GlassDialog(
-      title: 'Annual rent increase',
+      title: 'Annual Lease Escalation Rate',
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -499,7 +499,7 @@ class _RaisePercentDialogState extends State<_RaisePercentDialog> {
               LengthLimitingTextInputFormatter(6),
             ],
             decoration: const InputDecoration(
-              labelText: 'Increase %  (0 = off, decimals allowed)',
+              labelText: 'Escalation rate %  (0 = off, decimals allowed)',
               suffixText: '%',
               isDense: true,
             ),

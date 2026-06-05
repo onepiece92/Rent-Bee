@@ -5,7 +5,7 @@ import '../domain/bs_calendar.dart';
 
 /// App-wide preferences, persisted so they survive restarts:
 ///   • the calendar the UI labels dates in (BS vs AD), and
-///   • the annual rent-increase percentage applied automatically on each
+///   • the annual lease escalation rate applied automatically on each
 ///     unit's anniversary (0 = off).
 class SettingsProvider extends ChangeNotifier {
   static const _kCalendar = 'calendar_mode';
@@ -13,7 +13,7 @@ class SettingsProvider extends ChangeNotifier {
   // so reading never hits a SharedPreferences type clash.
   static const _kRaisePercent = 'annual_raise_pct';
 
-  /// Default automatic yearly increase, applied on each unit's anniversary.
+  /// Default automatic yearly lease escalation, applied on each unit's anniversary.
   static const double _defaultRaisePercent = 5;
 
   /// Upper bound to guard against runaway typos; effectively "any" rate.
@@ -33,7 +33,7 @@ class SettingsProvider extends ChangeNotifier {
   CalendarMode get calendar => _calendar;
   bool get isAd => _calendar == CalendarMode.ad;
 
-  /// Yearly increase as a percentage (may be fractional, e.g. 7.5). 0 disables
+  /// Yearly lease escalation as a percentage (may be fractional, e.g. 7.5). 0 disables
   /// the automatic raise.
   double get annualRaisePercent => _annualRaisePercent;
 

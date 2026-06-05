@@ -86,6 +86,9 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mode = context.watch<SettingsProvider>().calendar;
+    // The real current BS month, for the "jump to today" chip.
+    final today = bsYearMonth(DateTime.now());
+    final currentMonth = BsMonth(today.year, today.month);
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
       child: Column(
@@ -112,8 +115,12 @@ class _Header extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              // Today's date, in the active calendar.
-              _TodayChip(mode: mode),
+              // Today's date — tap to jump back to the current month.
+              _TodayChip(
+                mode: mode,
+                isCurrent: ledger.month == currentMonth,
+                onTap: () => ledger.setMonth(currentMonth),
+              ),
             ],
           ),
           const SizedBox(height: 14),
@@ -157,33 +164,57 @@ class _Header extends StatelessWidget {
 }
 
 /// Small pill in the header showing today's date in the active calendar.
+/// Tapping it jumps the ledger back to the current month; when the selected
+/// month differs from today, the pill takes an orange "return to today" accent.
 class _TodayChip extends StatelessWidget {
   final CalendarMode mode;
-  const _TodayChip({required this.mode});
+  final bool isCurrent;
+  final VoidCallback onTap;
+  const _TodayChip({
+    required this.mode,
+    required this.isCurrent,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.07),
+    final accent = !isCurrent; // viewing another month → actionable accent
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: Brand.glassBorder),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.today, size: 13, color: Brand.orangeSoft),
-          const SizedBox(width: 5),
-          Text(
-            todayLabel(mode),
-            style: const TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w600,
-              color: Brand.text,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: accent
+                ? Brand.orange.withValues(alpha: 0.16)
+                : Colors.white.withValues(alpha: 0.07),
+            borderRadius: BorderRadius.circular(99),
+            border: Border.all(
+              color: accent
+                  ? Brand.orange.withValues(alpha: 0.5)
+                  : Brand.glassBorder,
             ),
           ),
-        ],
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(accent ? Icons.undo_rounded : Icons.today,
+                  size: 13,
+                  color: accent ? Brand.orangeWarm : Brand.orangeSoft),
+              const SizedBox(width: 5),
+              Text(
+                todayLabel(mode),
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: accent ? Brand.orangeWarm : Brand.text,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

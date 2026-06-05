@@ -142,6 +142,23 @@ void main() {
       expect((await repo.allUnits()).single.monthlyRent, 12100);
     });
 
+    test('added 3 years ago at 10000 grows to 11576 at 5% (catch-up on add)',
+        () async {
+      // Mirrors the add flow: a unit entered with a start date 3 years back and
+      // the rent it had then; the catch-up grows it to today across 3 years.
+      await repo.createUnit(UnitsCompanion.insert(
+        code: 'A-07',
+        tenantName: 'T7',
+        monthlyRent: 10000,
+        startedOn: Value(DateTime(2023, 6, 15)),
+      ));
+      final n = await repo.applyAnniversaryRaises(
+          percent: 5, asOf: DateTime(2026, 6, 15));
+      expect(n, 1);
+      // 10000 -> 10500 -> 11025 -> 11576 (rounded each year)
+      expect((await repo.allUnits()).single.monthlyRent, 11576);
+    });
+
     test('anniversary raise: skips new tenants, inactive, no-date, and 0%',
         () async {
       final asOf = DateTime(2026, 6, 15);

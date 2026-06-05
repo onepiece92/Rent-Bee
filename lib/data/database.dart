@@ -21,12 +21,12 @@ class Units extends Table {
       dateTime().withDefault(currentDateAndTime)();
 
   /// When the tenant joined / the current rent started. Anchors the annual
-  /// rent increase: a unit is only raised once a full year has passed since
+  /// lease escalation: a unit is only raised once a full year has passed since
   /// this date (so a newly-joined tenant isn't raised immediately). Nullable
   /// for legacy units with no recorded start.
   DateTimeColumn get startedOn => dateTime().nullable()();
 
-  /// Last time the annual increase was applied to this unit. Makes the raise
+  /// Last time the annual lease escalation was applied to this unit. Makes the raise
   /// idempotent within a year — eligibility is measured from
   /// `lastRaisedOn ?? startedOn`. Null until the first raise.
   DateTimeColumn get lastRaisedOn => dateTime().nullable()();
@@ -99,7 +99,7 @@ class AppDatabase extends _$AppDatabase {
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onUpgrade: (m, from, to) async {
-          // v2: per-unit rent-start + last-raised dates for the annual increase.
+          // v2: per-unit rent-start + last-raised dates for the annual lease escalation.
           if (from < 2) {
             await m.addColumn(units, units.startedOn);
             await m.addColumn(units, units.lastRaisedOn);

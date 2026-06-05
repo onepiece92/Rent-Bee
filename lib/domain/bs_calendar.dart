@@ -104,7 +104,7 @@ String dateLabel(DateTime date, CalendarMode mode) {
 }
 
 /// The Bikram Sambat (year, month) a Gregorian [date] falls in. Used by the
-/// annual rent increase to anchor each unit's anniversary to its start month.
+/// annual lease escalation to anchor each unit's anniversary to its start month.
 ({int year, int month}) bsYearMonth(DateTime date) {
   final n = date.toNepaliDateTime();
   return (year: n.year, month: n.month);
