@@ -115,7 +115,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   Future<void> _exportCsv() async {
     final overlay = Overlay.of(context, rootOverlay: true); // capture pre-await
-    final origin = _shareOrigin(context);
+    final origin = shareOriginFor(context);
     final (start, end) = _range;
     try {
       final csv =
@@ -125,13 +125,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
     } catch (e) {
       showToastOn(overlay, 'Export failed: $e', error: true);
     }
-  }
-
-  /// Global rect of this screen, used to anchor the share popover on iPad/macOS.
-  Rect? _shareOrigin(BuildContext context) {
-    final box = context.findRenderObject();
-    if (box is! RenderBox || !box.hasSize) return null;
-    return box.localToGlobal(Offset.zero) & box.size;
   }
 
   String _exportSuffix(int start) => switch (_scope) {
@@ -151,7 +144,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 16, 16, 8),
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
             child: Row(
               children: [
                 Expanded(
@@ -168,11 +161,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 6),
             child: _ScopeToggle(scope: _scope, onChanged: _setScope),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
             child: _PeriodStepper(
               label: _periodLabel(mode),
               onPrev: () => _step(-1),
@@ -299,7 +292,7 @@ class _ReportBody extends StatelessWidget {
         if (isPeriod) ...[
           const _SectionTitle('Monthly breakdown'),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
             child: GlassPanel(
               child: Column(
                 children: [
@@ -321,7 +314,7 @@ class _ReportBody extends StatelessWidget {
           )
         else
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 18),
             child: Column(
               children: [
                 for (final d in outstanding) ...[
@@ -343,7 +336,7 @@ class _SectionTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
       child: Text(text,
           style:
               const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
@@ -456,7 +449,7 @@ class _SummaryGrid extends StatelessWidget {
       ('Paid', '${summary.paidSlots}/${summary.totalSlots}', Brand.text),
     ];
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      padding: const EdgeInsets.fromLTRB(18, 4, 18, 12),
       child: GridView.count(
         crossAxisCount: 2,
         shrinkWrap: true,

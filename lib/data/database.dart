@@ -30,6 +30,40 @@ class Units extends Table {
   /// idempotent within a year — eligibility is measured from
   /// `lastRaisedOn ?? startedOn`. Null until the first raise.
   DateTimeColumn get lastRaisedOn => dateTime().nullable()();
+
+  /// Refundable security deposit held for the tenant, whole NPR. 0 = none.
+  IntColumn get depositAmount =>
+      integer().withDefault(const Constant(0))();
+
+  /// Whether the deposit has been returned to the tenant. false = still held.
+  BoolColumn get depositRefunded =>
+      boolean().withDefault(const Constant(false))();
+
+  /// When the deposit was refunded. Null while still held.
+  DateTimeColumn get depositRefundedOn => dateTime().nullable()();
+}
+
+/// Variable per-month utility/service charges for a unit, tracked separately
+/// from rent. One row per (unit, month); absent row = nothing recorded yet.
+/// These do NOT feed the rent collection summary — they are their own ledger.
+@DataClassName('Charge')
+class Charges extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get unitId =>
+      integer().references(Units, #id, onDelete: KeyAction.cascade)();
+  IntColumn get year => integer()(); // BS year
+  IntColumn get month => integer()(); // 1–12
+  IntColumn get electricity => integer().withDefault(const Constant(0))();
+  IntColumn get water => integer().withDefault(const Constant(0))();
+  IntColumn get service => integer().withDefault(const Constant(0))();
+  DateTimeColumn get createdAt =>
+      dateTime().withDefault(currentDateAndTime)();
+
+  // One charges record per unit per month.
+  @override
+  List<Set<Column>> get uniqueKeys => [
+        {unitId, year, month},
+      ];
 }
 
 @DataClassName('Payment')
@@ -54,13 +88,13 @@ class Payments extends Table {
       ];
 }
 
-@DriftDatabase(tables: [Units, Payments])
+@DriftDatabase(tables: [Units, Payments, Charges])
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.executor);
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -69,6 +103,13 @@ class AppDatabase extends _$AppDatabase {
           if (from < 2) {
             await m.addColumn(units, units.startedOn);
             await m.addColumn(units, units.lastRaisedOn);
+          }
+          // v3: tracked security deposit + variable per-month utility charges.
+          if (from < 3) {
+            await m.addColumn(units, units.depositAmount);
+            await m.addColumn(units, units.depositRefunded);
+            await m.addColumn(units, units.depositRefundedOn);
+            await m.createTable(charges);
           }
         },
         beforeOpen: (details) async {

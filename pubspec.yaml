@@ -55,6 +55,7 @@ dependencies:
   # CSV import: native file picker + a robust (quote-aware) CSV parser.
   file_picker: ^8.1.6
   csv: ^6.0.0
+  flutter_native_contact_picker: ^0.0.12
 
 dev_dependencies:
   flutter_test:

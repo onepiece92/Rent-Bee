@@ -67,11 +67,11 @@ class LedgerProvider extends ChangeNotifier {
   int get activeUnitCount =>
       _rows.where((r) => r.unit.isActive).length;
 
-  /// Seeds on first run, applies any due automatic rent increases (see
+  /// Applies any due automatic rent increases (see
   /// [LedgerRepository.applyAnniversaryRaises]) at [annualRaisePercent], then
-  /// loads the current month. Called once at startup.
+  /// loads the current month. Called once at startup. The ledger starts **empty**
+  /// on a fresh install — demo data is opt-in via Settings → Generate demo data.
   Future<void> init({double annualRaisePercent = 0}) async {
-    await repo.seedIfEmpty();
     if (annualRaisePercent > 0) {
       await repo.applyAnniversaryRaises(percent: annualRaisePercent);
     }
@@ -147,10 +147,44 @@ class LedgerProvider extends ChangeNotifier {
     await refresh();
   }
 
-  /// Replace all data with a populated demo dataset (anchored at the current
-  /// selected month).
-  Future<void> generateDemoData() async {
-    await repo.generateDemoData(_month);
+  // ---- Charges (variable per-month utility/service fees) -----------------
+
+  /// This unit's charges for the selected month (null = none recorded yet).
+  Future<Charge?> chargesFor(int unitId) =>
+      repo.chargesFor(unitId, _month.year, _month.month);
+
+  /// Record this unit's electricity/water/service charges for the selected
+  /// month, then refresh.
+  Future<void> setCharges(
+    int unitId, {
+    int electricity = 0,
+    int water = 0,
+    int service = 0,
+  }) async {
+    await repo.setCharges(unitId, _month.year, _month.month,
+        electricity: electricity, water: water, service: service);
+    await refresh();
+  }
+
+  // ---- Deposit -----------------------------------------------------------
+
+  /// Set the held deposit amount on a unit, then refresh.
+  Future<void> setDeposit(Unit unit, int amount) async {
+    await repo.setDeposit(unit, amount);
+    await refresh();
+  }
+
+  /// Flip a unit's deposit between held and refunded, then refresh.
+  Future<void> setDepositRefunded(Unit unit, bool refunded) async {
+    await repo.setDepositRefunded(unit, refunded);
+    await refresh();
+  }
+
+  /// Replace all data with a realistic multi-year demo dataset (anchored at the
+  /// current selected month), with rent growing each anniversary by
+  /// [annualRaisePercent]%.
+  Future<void> generateDemoData(double annualRaisePercent) async {
+    await repo.generateDemoData(_month, annualRaisePercent: annualRaisePercent);
     await refresh();
   }
 

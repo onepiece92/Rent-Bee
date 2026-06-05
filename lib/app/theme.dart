@@ -88,6 +88,38 @@ ThemeData buildTheme() {
       displayColor: Brand.text,
     ),
     splashFactory: InkRipple.splashFactory,
+    // Keep stray Material dialogs (e.g. the date picker) on the navy surface.
+    dialogTheme: DialogThemeData(
+      backgroundColor: Brand.navy,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+    ),
+    // Airy underline fields for any TextField that doesn't override it —
+    // mainly the inputs inside the minimal dialogs.
+    inputDecorationTheme: const InputDecorationTheme(
+      isDense: true,
+      filled: false,
+      hintStyle: TextStyle(color: Color(0x66FFFFFF)),
+      labelStyle: TextStyle(color: Brand.muted),
+      floatingLabelStyle: TextStyle(color: Brand.orange),
+      contentPadding: EdgeInsets.symmetric(vertical: 9),
+      enabledBorder: UnderlineInputBorder(
+        borderSide: BorderSide(color: Brand.glassBorder),
+      ),
+      focusedBorder: UnderlineInputBorder(
+        borderSide: BorderSide(color: Brand.orange, width: 2),
+      ),
+    ),
+    // Brand pills for ChoiceChip (the rent-raise preset chips).
+    chipTheme: ChipThemeData(
+      backgroundColor: Brand.glassBg,
+      selectedColor: Brand.orange,
+      side: const BorderSide(color: Brand.glassBorder),
+      labelStyle: const TextStyle(
+          color: Brand.text, fontWeight: FontWeight.w600, fontSize: 13),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(99)),
+      showCheckmark: false,
+    ),
   );
 }
 

@@ -1,8 +1,19 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:ui' show Rect;
+import 'dart:ui' show Rect, Offset;
 
+import 'package:flutter/rendering.dart' show RenderBox;
+import 'package:flutter/widgets.dart' show BuildContext;
 import 'package:share_plus/share_plus.dart';
+
+/// Global rect of the widget at [context], used to anchor the share popover on
+/// iPad/macOS. Returns null when the box isn't laid out yet (phones ignore the
+/// origin anyway).
+Rect? shareOriginFor(BuildContext context) {
+  final box = context.findRenderObject();
+  if (box is! RenderBox || !box.hasSize) return null;
+  return box.localToGlobal(Offset.zero) & box.size;
+}
 
 /// Shares [csv] as an actual `.csv` file named [fileName] via the system
 /// share sheet, so the user can save it to Files/Drive or attach it to email

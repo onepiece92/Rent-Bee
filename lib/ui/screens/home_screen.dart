@@ -7,8 +7,11 @@ import '../../domain/models.dart';
 import '../../domain/money.dart';
 import '../../state/ledger_provider.dart';
 import '../../state/settings_provider.dart';
+import '../sheets/edit_unit_sheet.dart';
 import '../sheets/unit_detail_sheet.dart';
+import '../util/sms_reminder.dart';
 import '../widgets/glass.dart';
+import '../widgets/sponsored_carousel.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -36,6 +39,9 @@ class _HomeScreenState extends State<HomeScreen> {
         color: Brand.orange,
         backgroundColor: Brand.navy,
         child: CustomScrollView(
+          // Stay scrollable even when content is short, so pull-to-refresh
+          // works on an empty ledger.
+          physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
             SliverToBoxAdapter(child: _Header(ledger: ledger)),
             SliverToBoxAdapter(child: _SummaryCard(summary: ledger.summary)),
@@ -43,15 +49,19 @@ class _HomeScreenState extends State<HomeScreen> {
               child: _SearchAndFilter(ledger: ledger, controller: _searchCtrl),
             ),
             if (ledger.loading)
-              const SliverFillRemaining(
-                hasScrollBody: false,
-                child: Center(child: CircularProgressIndicator()),
+              const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 48),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
               )
             else if (ledger.visibleRows.isEmpty)
-              const SliverFillRemaining(hasScrollBody: false, child: _Empty())
+              SliverToBoxAdapter(
+                child: _Empty(noUnits: ledger.totalCount == 0),
+              )
             else
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(14, 6, 14, 120),
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
                 sliver: SliverList.separated(
                   itemCount: ledger.visibleRows.length,
                   separatorBuilder: (_, i) => const SizedBox(height: 9),
@@ -59,6 +69,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       _UnitTile(row: ledger.visibleRows[i]),
                 ),
               ),
+            // Sponsored carousel — outside the list, shown even when empty.
+            const SliverToBoxAdapter(child: SponsoredCarousel()),
+            const SliverToBoxAdapter(child: SizedBox(height: 120)),
           ],
         ),
       ),
@@ -201,7 +214,7 @@ class _SummaryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 8, 18, 4),
+      padding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
       child: GlassPanel(
         sheen: true,
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
@@ -336,7 +349,7 @@ class _SearchAndFilter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
+      padding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
       child: Column(
         children: [
           GlassPanel(
@@ -353,6 +366,9 @@ class _SearchAndFilter extends StatelessWidget {
                     style: const TextStyle(fontSize: 14.5, color: Brand.text),
                     decoration: const InputDecoration(
                       isDense: true,
+                      // The search box already sits in a GlassPanel — opt out of
+                      // the global filled glass field background.
+                      filled: false,
                       border: InputBorder.none,
                       hintText: 'Search tenant or unit…',
                       hintStyle: TextStyle(
@@ -491,16 +507,63 @@ class _UnitTile extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 6),
-              switch (row.status) {
-                PayStatus.paid => const StatusPill(paid: true),
-                PayStatus.partial => _PartialPill(remaining: row.remaining),
-                PayStatus.pending => _MarkPaidPill(
-                  onTap: () => context.read<LedgerProvider>().markPaid(s),
-                ),
-              },
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Quick rent reminder — only when a phone is on file.
+                  if (s.phone != null && s.phone!.isNotEmpty) ...[
+                    _CardSmsButton(
+                      onTap: () => sendRentReminder(
+                        context,
+                        s,
+                        context.read<LedgerProvider>().month,
+                        paid: paid,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  switch (row.status) {
+                    PayStatus.paid => const StatusPill(paid: true),
+                    PayStatus.partial => _PartialPill(remaining: row.remaining),
+                    PayStatus.pending => _MarkPaidPill(
+                      onTap: () => context.read<LedgerProvider>().markPaid(s),
+                    ),
+                  },
+                ],
+              ),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Compact SMS-reminder button on a unit card. Its own tap target, so it fires
+/// the reminder without opening the detail sheet behind it.
+class _CardSmsButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _CardSmsButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(9),
+        child: Container(
+          width: 30,
+          height: 30,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: Brand.glassBg,
+            borderRadius: BorderRadius.circular(9),
+            border: Border.all(color: Brand.glassBorder),
+          ),
+          child: const Icon(Icons.sms_outlined,
+              size: 15, color: Brand.orangeSoft),
+        ),
       ),
     );
   }
@@ -569,15 +632,98 @@ class _MarkPaidPill extends StatelessWidget {
 }
 
 class _Empty extends StatelessWidget {
-  const _Empty();
+  /// True when the ledger has no units at all (vs a search/filter with no hits).
+  final bool noUnits;
+  const _Empty({required this.noUnits});
+
   @override
   Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.all(40),
-      child: Center(
-        child: Text(
-          'No units match.',
-          style: TextStyle(color: Brand.muted, fontSize: 14),
+    // A search/filter that matched nothing — keep it plain.
+    if (!noUnits) {
+      return const Padding(
+        padding: EdgeInsets.all(40),
+        child: Center(
+          child: Text(
+            'No units match.',
+            style: TextStyle(color: Brand.muted, fontSize: 14),
+          ),
+        ),
+      );
+    }
+
+    // A genuinely empty ledger — invite the owner to add their first unit.
+    // Generous bottom padding keeps the button clear of the floating nav bar.
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 40, 32, 28),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 76,
+            height: 76,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: Brand.glassBg,
+              shape: BoxShape.circle,
+              border: Border.all(color: Brand.glassBorder),
+            ),
+            child: const Icon(Icons.storefront_outlined,
+                size: 33, color: Brand.orangeSoft),
+          ),
+          const SizedBox(height: 18),
+          Text('No units yet',
+              style: display(fontSize: 19, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          const Text(
+            'Add your shutters or shops to start tracking rent each month.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Brand.muted, fontSize: 13.5, height: 1.35),
+          ),
+          const SizedBox(height: 22),
+          _AddFirstUnitButton(onTap: () => EditUnitSheet.show(context)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Primary call-to-action on the empty ledger — opens the new-unit sheet.
+class _AddFirstUnitButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _AddFirstUnitButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+          decoration: BoxDecoration(
+            gradient: Brand.orangeGradient,
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Brand.orange.withValues(alpha: 0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.add_rounded, size: 19, color: Colors.white),
+              SizedBox(width: 7),
+              Text('Add your first unit',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w700)),
+            ],
+          ),
         ),
       ),
     );

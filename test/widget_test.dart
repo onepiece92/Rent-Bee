@@ -186,5 +186,55 @@ void main() {
       expect(rents['B-03'], 40000);
       expect(rents['B-04'], 50000);
     });
+
+    test('demo data: 3 years of history with rent that grows each year',
+        () async {
+      const anchor = BsMonth(2082, 6);
+      await repo.generateDemoData(anchor, annualRaisePercent: 10, years: 3);
+
+      final units = await repo.allUnits();
+      expect(units.length, 10);
+
+      // A-01 (i=0): start month = anchor.month = 6, base 18000, 3 anniversaries.
+      final a01 = units.firstWhere((u) => u.code == 'A-01');
+      expect(a01.monthlyRent, 23958); // 18000 ·1.1·1.1·1.1 -> 19800,21780,23958
+
+      // A-01 falls on the ~70% "paid" cadence at both ends of the window.
+      Future<int> amt(int year, int month) async =>
+          (await repo.paymentsForMonth(year, month))
+              .firstWhere((p) => p.unitId == a01.id)
+              .amount;
+      expect(await amt(2079, 7), 18000); // oldest month, base rent
+      expect(await amt(2082, 6), 23958); // newest month, grown rent
+
+      // The launch auto-raise is a no-op (lastRaisedOn already stamped).
+      final asOf = adForBsMonthStart(2082, 6);
+      expect(await repo.applyAnniversaryRaises(percent: 10, asOf: asOf), 0);
+
+      // Spans 3 BS years of payments.
+      final allPayments = await db.select(db.payments).get();
+      final years = {for (final p in allPayments) p.year};
+      expect(years.containsAll({2079, 2080, 2081, 2082}), isTrue);
+
+      // Deposit is populated (~2 months of the starting rent) and held.
+      expect(a01.depositAmount, 36000); // 18000 × 2
+      expect(a01.depositRefunded, isFalse);
+
+      // Utility charges exist for the current month.
+      final ch = await repo.chargesFor(a01.id, 2082, 6);
+      expect(ch, isNotNull);
+      expect(ch!.electricity + ch.water + ch.service, greaterThan(0));
+
+      // The last unit demonstrates a completed tenancy: vacant, deposit
+      // refunded, and no payments/charges after move-out.
+      final c02 = units.firstWhere((u) => u.code == 'C-02');
+      expect(c02.isActive, isFalse);
+      expect(c02.depositRefunded, isTrue);
+      expect(c02.depositRefundedOn, isNotNull);
+      expect(
+          (await repo.paymentsForMonth(2082, 6)).any((p) => p.unitId == c02.id),
+          isFalse);
+      expect(await repo.chargesFor(c02.id, 2082, 6), isNull);
+    });
   });
 }

@@ -1,11 +1,14 @@
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_native_contact_picker/flutter_native_contact_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/theme.dart';
 import '../../data/database.dart';
 import '../../domain/bs_calendar.dart';
+import '../../domain/phone.dart';
+import '../../domain/unit_code.dart';
 import '../../state/ledger_provider.dart';
 import '../../state/settings_provider.dart';
 import '../widgets/sheet_scaffold.dart';
@@ -34,6 +37,7 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
   late final TextEditingController _business;
   late final TextEditingController _rent;
   late final TextEditingController _phone;
+  late final TextEditingController _deposit;
   late bool _active;
   // When the tenant joined / rent started — anchors the annual rent increase.
   // New units default to today; existing units keep whatever was set (may null).
@@ -45,11 +49,23 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
   void initState() {
     super.initState();
     final s = widget.unit;
-    _code = TextEditingController(text: s?.code ?? '');
+    // For a new unit, suggest the next code (e.g. C-02 → C-03) so the owner
+    // doesn't have to invent one. Editing keeps the existing code.
+    final suggestedCode = s == null
+        ? suggestUnitCode(context
+            .read<LedgerProvider>()
+            .allUnitsByCode
+            .map((r) => r.unit.code))
+        : s.code;
+    _code = TextEditingController(text: suggestedCode);
     _tenant = TextEditingController(text: s?.tenantName ?? '');
     _business = TextEditingController(text: s?.businessType ?? '');
     _rent = TextEditingController(text: s?.monthlyRent.toString() ?? '');
     _phone = TextEditingController(text: s?.phone ?? '');
+    _deposit = TextEditingController(
+        text: (s == null || s.depositAmount == 0)
+            ? ''
+            : s.depositAmount.toString());
     _active = s?.isActive ?? true;
     _startedOn = s?.startedOn ?? (s == null ? DateTime.now() : null);
   }
@@ -73,14 +89,36 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
     _business.dispose();
     _rent.dispose();
     _phone.dispose();
+    _deposit.dispose();
     super.dispose();
+  }
+
+  /// Opens the OS contact picker (no permission needed) and fills the phone —
+  /// and the tenant name too, if it's still blank — from the chosen contact.
+  Future<void> _pickFromContacts() async {
+    try {
+      final contact = await FlutterNativeContactPicker().selectPhoneNumber();
+      if (contact == null) return; // cancelled
+      final number = contact.selectedPhoneNumber ??
+          (contact.phoneNumbers?.isNotEmpty ?? false
+              ? contact.phoneNumbers!.first
+              : null);
+      if (number != null) _phone.text = normalizePhone(number);
+      final name = contact.fullName?.trim() ?? '';
+      if (_tenant.text.trim().isEmpty && name.isNotEmpty) _tenant.text = name;
+      if (mounted) setState(() {});
+    } catch (_) {
+      if (mounted) showToast(context, 'Could not open contacts', error: true);
+    }
   }
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final ledger = context.read<LedgerProvider>();
     final rent = int.tryParse(_rent.text.trim()) ?? 0;
-    final phone = _phone.text.trim().isEmpty ? null : _phone.text.trim();
+    final cleanedPhone = normalizePhone(_phone.text);
+    final phone = cleanedPhone.isEmpty ? null : cleanedPhone;
+    final deposit = int.tryParse(_deposit.text.trim()) ?? 0;
 
     try {
       if (_isEdit) {
@@ -94,6 +132,7 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
           phone: Value(phone),
           isActive: _active,
           startedOn: Value(_startedOn),
+          depositAmount: deposit,
         ));
       } else {
         await ledger.createUnit(UnitsCompanion.insert(
@@ -104,6 +143,7 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
           phone: Value(phone),
           isActive: Value(_active),
           startedOn: Value(_startedOn),
+          depositAmount: Value(deposit),
         ));
       }
       if (mounted) Navigator.of(context).pop();
@@ -141,6 +181,9 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
             controller: _tenant,
             label: 'Tenant name',
             hint: 'Full name',
+            // The code is pre-suggested, so land the cursor on the first thing
+            // the owner actually types. Only on add — not when editing.
+            autofocus: !_isEdit,
             validator: (v) =>
                 (v == null || v.trim().isEmpty) ? 'Required' : null,
           ),
@@ -169,6 +212,17 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
                   label: 'Phone',
                   hint: '98…',
                   keyboardType: TextInputType.phone,
+                  // Clean spaces/dashes on type or paste, then sanity-check.
+                  inputFormatters: [_PhoneInputFormatter()],
+                  validator: phoneError,
+                  // Tap to pull a number straight from the OS contact picker.
+                  suffixIcon: IconButton(
+                    tooltip: 'Pick from contacts',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.contact_phone_outlined,
+                        size: 18, color: Brand.orange),
+                    onPressed: _pickFromContacts,
+                  ),
                 ),
               ),
             ],
@@ -180,6 +234,13 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
             onClear: _startedOn == null
                 ? null
                 : () => setState(() => _startedOn = null),
+          ),
+          _Field(
+            controller: _deposit,
+            label: 'Security deposit (Rs)',
+            hint: 'e.g. 20000 — leave blank for none',
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           ),
           SwitchListTile(
             value: _active,
@@ -310,6 +371,21 @@ class _DateField extends StatelessWidget {
   }
 }
 
+/// Live-cleans a phone field: on every keystroke or paste it strips spaces,
+/// dashes and parens down to digits (plus an optional leading `+`), so the
+/// stored number is always tidy and SMS reminders work.
+class _PhoneInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    final cleaned = normalizePhone(newValue.text);
+    return TextEditingValue(
+      text: cleaned,
+      selection: TextSelection.collapsed(offset: cleaned.length),
+    );
+  }
+}
+
 class _Field extends StatelessWidget {
   final TextEditingController controller;
   final String label;
@@ -317,6 +393,8 @@ class _Field extends StatelessWidget {
   final TextInputType? keyboardType;
   final List<TextInputFormatter>? inputFormatters;
   final String? Function(String?)? validator;
+  final bool autofocus;
+  final Widget? suffixIcon;
 
   const _Field({
     required this.controller,
@@ -325,6 +403,8 @@ class _Field extends StatelessWidget {
     this.keyboardType,
     this.inputFormatters,
     this.validator,
+    this.autofocus = false,
+    this.suffixIcon,
   });
 
   @override
@@ -342,6 +422,7 @@ class _Field extends StatelessWidget {
           const SizedBox(height: 6),
           TextFormField(
             controller: controller,
+            autofocus: autofocus,
             keyboardType: keyboardType,
             inputFormatters: inputFormatters,
             validator: validator,
@@ -350,6 +431,9 @@ class _Field extends StatelessWidget {
               isDense: true,
               hintText: hint,
               hintStyle: const TextStyle(color: Color(0x66FFFFFF)),
+              suffixIcon: suffixIcon,
+              suffixIconConstraints:
+                  const BoxConstraints(minWidth: 40, minHeight: 40),
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               filled: true,

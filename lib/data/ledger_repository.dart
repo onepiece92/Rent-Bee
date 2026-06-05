@@ -170,6 +170,74 @@ class LedgerRepository {
         .go();
   }
 
+  // ---- Charges (variable per-month utility/service fees) -----------------
+
+  /// This unit's charges row for the month, or null if nothing recorded.
+  Future<Charge?> chargesFor(int unitId, int year, int month) {
+    return (db.select(db.charges)
+          ..where((c) =>
+              c.unitId.equals(unitId) &
+              c.year.equals(year) &
+              c.month.equals(month)))
+        .getSingleOrNull();
+  }
+
+  /// Insert-or-update this month's electricity/water/service charges for a unit
+  /// (negatives floored at 0). When all three are 0 the row is deleted instead,
+  /// keeping the table sparse so "no charges" and "all zero" read the same.
+  Future<void> setCharges(
+    int unitId,
+    int year,
+    int month, {
+    int electricity = 0,
+    int water = 0,
+    int service = 0,
+  }) async {
+    final e = electricity < 0 ? 0 : electricity;
+    final w = water < 0 ? 0 : water;
+    final s = service < 0 ? 0 : service;
+    if (e == 0 && w == 0 && s == 0) {
+      await (db.delete(db.charges)
+            ..where((c) =>
+                c.unitId.equals(unitId) &
+                c.year.equals(year) &
+                c.month.equals(month)))
+          .go();
+      return;
+    }
+    final entry = ChargesCompanion.insert(
+      unitId: unitId,
+      year: year,
+      month: month,
+      electricity: Value(e),
+      water: Value(w),
+      service: Value(s),
+    );
+    // Upsert on the (unit, year, month) unique index — see [_upsertPayment] for
+    // why we name the target rather than using insertOnConflictUpdate.
+    await db.into(db.charges).insert(
+          entry,
+          onConflict: DoUpdate(
+            (_) => entry,
+            target: [db.charges.unitId, db.charges.year, db.charges.month],
+          ),
+        );
+  }
+
+  // ---- Deposit -----------------------------------------------------------
+
+  /// Set the held security-deposit amount for a unit (whole NPR, floored at 0).
+  Future<void> setDeposit(Unit unit, int amount) =>
+      updateUnit(unit.copyWith(depositAmount: amount < 0 ? 0 : amount));
+
+  /// Flip a unit's deposit between held and refunded, stamping or clearing the
+  /// refund date to match.
+  Future<void> setDepositRefunded(Unit unit, bool refunded, {DateTime? on}) =>
+      updateUnit(unit.copyWith(
+        depositRefunded: refunded,
+        depositRefundedOn: Value(refunded ? (on ?? DateTime.now()) : null),
+      ));
+
   // ---- Reporting ---------------------------------------------------------
 
   Future<MonthSummary> summary(int year, int month) async {
@@ -316,20 +384,7 @@ class LedgerRepository {
     final buf = StringBuffer()
       ..writeln('code,tenant,rent,status,paid_on,method,amount');
     for (final r in rows) {
-      final s = r.unit;
-      final p = r.payment;
-      final paidOn = p?.paidOn?.toIso8601String().split('T').first ?? '';
-      final method = p?.method.name ?? '';
-      final amount = p?.amount.toString() ?? '';
-      buf.writeln([
-        _csv(s.code),
-        _csv(s.tenantName),
-        s.monthlyRent,
-        _statusLabel(r),
-        paidOn,
-        method,
-        amount,
-      ].join(','));
+      buf.writeln(_csvRow(r));
     }
     return buf.toString();
   }
@@ -344,24 +399,27 @@ class LedgerRepository {
       final rows = await rowsForMonth(year, m);
       final monthLabel = BsCalendar.label(m);
       for (final r in rows) {
-        final s = r.unit;
-        final p = r.payment;
-        final paidOn = p?.paidOn?.toIso8601String().split('T').first ?? '';
-        final method = p?.method.name ?? '';
-        final amount = p?.amount.toString() ?? '';
-        buf.writeln([
-          _csv(monthLabel),
-          _csv(s.code),
-          _csv(s.tenantName),
-          s.monthlyRent,
-          _statusLabel(r),
-          paidOn,
-          method,
-          amount,
-        ].join(','));
+        buf.writeln(_csvRow(r, monthLabel: monthLabel));
       }
     }
     return buf.toString();
+  }
+
+  /// One CSV data row for a unit's month. [monthLabel], when given, prepends the
+  /// leading `month` column used by range exports; omit it for single-month
+  /// exports. Column order matches the headers written by the callers.
+  static String _csvRow(UnitRow r, {String? monthLabel}) {
+    final p = r.payment;
+    return [
+      if (monthLabel != null) _csv(monthLabel),
+      _csv(r.unit.code),
+      _csv(r.unit.tenantName),
+      r.unit.monthlyRent,
+      _statusLabel(r),
+      p?.paidOn?.toIso8601String().split('T').first ?? '',
+      p?.method.name ?? '',
+      p?.amount.toString() ?? '',
+    ].join(',');
   }
 
   static String _csv(String v) {
@@ -515,64 +573,123 @@ class LedgerRepository {
     ['C-02', 'Gita Bhandari', 'Bakery', 19000, '9801234510'],
   ];
 
-  Future<void> _insertDemoUnits() {
-    final now = DateTime.now();
-    // Varied rent-start dates (months ago) so the annual-raise gate is visible:
-    // the two units started < 12 months ago (9mo, 6mo) are skipped by a raise.
-    const monthsAgo = [24, 18, 14, 9, 30, 20, 6, 16, 26, 13];
-    return db.batch((b) {
-      for (var i = 0; i < _demoUnits.length; i++) {
-        final s = _demoUnits[i];
-        b.insert(
-          db.units,
-          UnitsCompanion.insert(
-            code: s[0] as String,
-            tenantName: s[1] as String,
-            businessType: Value(s[2] as String),
-            monthlyRent: s[3] as int,
-            phone: Value(s[4] as String),
-            startedOn:
-                Value(DateTime(now.year, now.month - monthsAgo[i], now.day)),
-          ),
-        );
-      }
-    });
-  }
 
-  /// Inserts the sample units on first run (idempotent: skips if any exist).
-  Future<void> seedIfEmpty() async {
-    final existing = await db.select(db.units).get();
-    if (existing.isNotEmpty) return;
-    await _insertDemoUnits();
-  }
-
-  /// Replaces all data with a populated demo dataset: the sample units plus a
-  /// realistic spread of payments across [anchor] and the three prior BS
-  /// months (~70% collected), so the ledger and reports look lived-in.
-  Future<void> generateDemoData(BsMonth anchor) async {
+  /// Replaces all data with a realistic [years]-year demo dataset anchored at
+  /// [anchor] (the selected month). Each unit starts [years] years back and its
+  /// rent **grows on every anniversary** by [annualRaisePercent]% — so each
+  /// month's payment is recorded at the rent that was in effect *that* BS year,
+  /// and the annual-increase feature is visible across history.
+  ///
+  /// The stored `monthly_rent` is the latest compounded value, and `lastRaisedOn`
+  /// is stamped at the current anniversary so the launch auto-raise is a no-op.
+  /// ~70% of (unit, month) slots are collected, so the ledger looks lived-in.
+  Future<void> generateDemoData(
+    BsMonth anchor, {
+    double annualRaisePercent = 5,
+    int years = 3,
+  }) async {
     await eraseAll();
-    await _insertDemoUnits();
-    final units = await allUnits();
-
-    final payments = <PaymentsCompanion>[];
+    final pct = annualRaisePercent > 0 ? annualRaisePercent : 5.0;
     final now = DateTime.now();
+
+    // The last unit demonstrates a completed tenancy: it moved out
+    // [vacatedMonthsAgo] months ago — marked vacant, deposit refunded, and no
+    // payments/charges after that month.
+    final vacantIndex = _demoUnits.length - 1;
+    const vacatedMonthsAgo = 7;
+    var vm = anchor;
+    for (var k = 0; k < vacatedMonthsAgo; k++) {
+      vm = vm.previous();
+    }
+    final vacatedOn = adForBsMonthStart(vm.year, vm.month);
+
+    // Insert units: started [years] years back (anniversary months spread for
+    // variety), at the compounded current rent, each holding a ~2-month deposit.
+    final ids = <int>[]; // parallel to _demoUnits
+    final bases = <int>[]; // oldest (starting) rent per unit
+    final startMonths = <int>[];
+    final startYear = anchor.year - years;
+    for (var i = 0; i < _demoUnits.length; i++) {
+      final base = _demoUnits[i][3] as int;
+      final startMonth = ((anchor.month - 1 + i * 2) % 12) + 1;
+      // Anniversaries elapsed as of the anchor month.
+      final anniv =
+          (anchor.month >= startMonth ? anchor.year : anchor.year - 1) -
+              startYear;
+      final vacant = i == vacantIndex;
+      final id = await createUnit(UnitsCompanion.insert(
+        code: _demoUnits[i][0] as String,
+        tenantName: _demoUnits[i][1] as String,
+        businessType: Value(_demoUnits[i][2] as String),
+        monthlyRent: _rentAfter(base, pct, anniv),
+        phone: Value(_demoUnits[i][4] as String),
+        startedOn: Value(adForBsMonthStart(startYear, startMonth)),
+        lastRaisedOn: Value(adForBsMonthStart(startYear + anniv, startMonth)),
+        depositAmount: Value(base * 2), // ~2 months, set at move-in
+        isActive: Value(!vacant),
+        depositRefunded: Value(vacant),
+        depositRefundedOn: Value(vacant ? vacatedOn : null),
+      ));
+      ids.add(id);
+      bases.add(base);
+      startMonths.add(startMonth);
+    }
+
+    // Payments (rent, ~70% collected) + monthly utility charges across the
+    // window. Charges are billed every active month regardless of rent.
+    final payments = <PaymentsCompanion>[];
+    final charges = <ChargesCompanion>[];
     var cursor = anchor;
-    for (var monthBack = 0; monthBack < 4; monthBack++) {
-      for (var j = 0; j < units.length; j++) {
-        // Deterministic ~70% paid, varied per unit and month.
-        if ((j * 7 + monthBack * 3) % 10 >= 7) continue;
-        final u = units[j];
-        payments.add(PaymentsCompanion.insert(
-          unitId: u.id,
+    for (var monthBack = 0; monthBack < years * 12; monthBack++) {
+      for (var i = 0; i < ids.length; i++) {
+        final sm = startMonths[i];
+        // Skip months before this unit started…
+        if (cursor.year < startYear ||
+            (cursor.year == startYear && cursor.month < sm)) {
+          continue;
+        }
+        // …and after the vacant unit moved out.
+        if (i == vacantIndex && monthBack < vacatedMonthsAgo) continue;
+
+        // Monthly utilities (electricity varies seasonally; water + service).
+        charges.add(ChargesCompanion.insert(
+          unitId: ids[i],
           year: cursor.year,
           month: cursor.month,
-          amount: u.monthlyRent,
-          paidOn: Value(now),
+          electricity: Value(900 + ((cursor.month + i) % 9) * 160),
+          water: Value(250 + (i % 3) * 60),
+          service: const Value(400),
         ));
+
+        // Rent, ~70% collected (deterministic), at the period's rent.
+        if ((i * 7 + monthBack * 3) % 10 < 7) {
+          final anniv = (cursor.month >= sm ? cursor.year : cursor.year - 1) -
+              startYear;
+          payments.add(PaymentsCompanion.insert(
+            unitId: ids[i],
+            year: cursor.year,
+            month: cursor.month,
+            amount: _rentAfter(bases[i], pct, anniv < 0 ? 0 : anniv),
+            paidOn: Value(now),
+          ));
+        }
       }
       cursor = cursor.previous();
     }
-    await db.batch((b) => b.insertAll(db.payments, payments));
+    await db.batch((b) {
+      b.insertAll(db.payments, payments);
+      b.insertAll(db.charges, charges);
+    });
+  }
+
+  /// [base] rent compounded by [pct]% for [anniversaries] years, rounded to
+  /// whole NPR each year — matching [applyAnniversaryRaises].
+  static int _rentAfter(int base, double pct, int anniversaries) {
+    var r = base;
+    for (var i = 0; i < anniversaries; i++) {
+      r = ((r * (100 + pct)) / 100).round();
+    }
+    return r;
   }
 
   /// Deletes every payment and unit. Irreversible.

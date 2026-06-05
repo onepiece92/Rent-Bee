@@ -52,7 +52,7 @@ class UnitsScreen extends StatelessWidget {
             )
           else
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(14, 6, 14, 120),
+              padding: const EdgeInsets.fromLTRB(18, 8, 18, 120),
               sliver: SliverList.separated(
                 itemCount: units.length,
                 separatorBuilder: (_, i) => const SizedBox(height: 9),

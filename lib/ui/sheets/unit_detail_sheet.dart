@@ -1,8 +1,6 @@
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/theme.dart';
 import '../../data/database.dart';
@@ -11,9 +9,10 @@ import '../../domain/models.dart';
 import '../../domain/money.dart';
 import '../../state/ledger_provider.dart';
 import '../../state/settings_provider.dart';
+import '../util/sms_reminder.dart';
 import '../widgets/glass.dart';
+import '../widgets/glass_dialog.dart';
 import '../widgets/sheet_scaffold.dart';
-import '../widgets/toast.dart';
 import 'edit_unit_sheet.dart';
 
 /// Bottom sheet: unit details, Collect/Undo for the selected month,
@@ -83,9 +82,8 @@ class UnitDetailSheet extends StatelessWidget {
               // Tap to text the tenant; only when a number is on file.
               onTap: (s.phone == null || s.phone!.isEmpty)
                   ? null
-                  : () => _sendSms(context, s.phone!,
-                      body: _reminderText(s, ledger.month,
-                          paid: row.payment != null)),
+                  : () => sendRentReminder(context, s, ledger.month,
+                      paid: row.payment != null),
               trailingIcon: (s.phone == null || s.phone!.isEmpty)
                   ? null
                   : Icons.sms_outlined,
@@ -109,10 +107,15 @@ class UnitDetailSheet extends StatelessWidget {
             ),
           ],
         ),
+        const SizedBox(height: 11),
+        Row(children: [_DepositCell(unit: s)]),
         const SizedBox(height: 16),
 
         // big Collect / Undo button
         _BigToggleButton(unit: s, payment: row.payment, month: ledger.month),
+
+        const SizedBox(height: 20),
+        _ChargesSection(unitId: s.id, month: ledger.month),
 
         const SizedBox(height: 20),
         const Text('Recent months',
@@ -127,57 +130,20 @@ class UnitDetailSheet extends StatelessWidget {
     );
   }
 
-  /// The message pre-filled into the SMS composer. A polite due-reminder when
-  /// the month is unpaid, a thank-you when it's already collected.
-  String _reminderText(Unit s, BsMonth m, {required bool paid}) {
-    final amount = Money.format(s.monthlyRent);
-    if (paid) {
-      return 'Hi ${s.tenantName}, thank you — we have received your '
-          '${m.monthName} ${m.year} rent of $amount.';
-    }
-    return 'Hi ${s.tenantName}, gentle reminder: rent of $amount for '
-        '${m.monthName} ${m.year} is due. Thank you!';
-  }
-
-  /// Opens the system Messages composer pre-addressed to [phone], with [body]
-  /// pre-filled when provided.
-  Future<void> _sendSms(BuildContext context, String phone,
-      {String? body}) async {
-    // Strip spaces/dashes the user may have typed; keep digits and a lead '+'.
-    final cleaned = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    final Uri uri;
-    if (body == null || body.isEmpty) {
-      uri = Uri(scheme: 'sms', path: cleaned);
-    } else {
-      // iOS expects the body after '&', Android/others after '?'.
-      final sep =
-          defaultTargetPlatform == TargetPlatform.iOS ? '&' : '?';
-      uri = Uri.parse('sms:$cleaned${sep}body=${Uri.encodeComponent(body)}');
-    }
-    final ok = await launchUrl(uri);
-    if (!ok && context.mounted) {
-      showToast(context, 'Could not open Messages for $phone', error: true);
-    }
-  }
 
   Future<void> _confirmDelete(
       BuildContext context, LedgerProvider ledger, Unit s) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Brand.navy,
-        title: const Text('Delete Unit?'),
+    final ok = await showGlassDialog<bool>(
+      context,
+      (ctx) => GlassDialog(
+        title: 'Delete Unit?',
         content: Text(
             'This removes ${s.code} (${s.tenantName}) and all its payment history.'),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
+          GlassDialogAction('Cancel',
+              onPressed: () => Navigator.pop(ctx, false)),
+          GlassDialogAction('Delete',
+              destructive: true, onPressed: () => Navigator.pop(ctx, true)),
         ],
       ),
     );
@@ -309,11 +275,10 @@ class _BigToggleButton extends StatelessWidget {
       BuildContext context, LedgerProvider ledger) async {
     final ctrl = TextEditingController(
         text: payment == null ? '' : payment!.amount.toString());
-    final result = await showDialog<int>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Brand.navy,
-        title: const Text('Amount received'),
+    final result = await showGlassDialog<int>(
+      context,
+      (ctx) => GlassDialog(
+        title: 'Amount received',
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -336,14 +301,12 @@ class _BigToggleButton extends StatelessWidget {
           ],
         ),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Brand.orange),
+          GlassDialogAction('Cancel', onPressed: () => Navigator.pop(ctx)),
+          GlassDialogAction(
+            'Save',
+            primary: true,
             onPressed: () =>
                 Navigator.pop(ctx, int.tryParse(ctrl.text.trim()) ?? 0),
-            child: const Text('Save'),
           ),
         ],
       ),
@@ -371,7 +334,7 @@ class _SecondaryButton extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 11),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: Brand.glassBg,
@@ -622,6 +585,326 @@ class _IconBtn extends StatelessWidget {
       onTap: onTap,
       child: SizedBox(
           width: 38, height: 38, child: Icon(icon, size: 16, color: Brand.text)),
+    );
+  }
+}
+
+/// Security-deposit cell: shows the held amount and whether it has been
+/// refunded, with a chip to flip between held and refunded. Hidden controls
+/// when no deposit is on file (amount 0).
+class _DepositCell extends StatelessWidget {
+  final Unit unit;
+  const _DepositCell({required this.unit});
+
+  @override
+  Widget build(BuildContext context) {
+    final ledger = context.read<LedgerProvider>();
+    final mode = context.watch<SettingsProvider>().calendar;
+    final has = unit.depositAmount > 0;
+    final refunded = unit.depositRefunded;
+    final sub = !has
+        ? null
+        : refunded
+            ? 'Refunded${unit.depositRefundedOn != null ? ' · ${dateLabel(unit.depositRefundedOn!, mode)}' : ''}'
+            : 'Held';
+
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: Brand.glassBg,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Brand.glassBorder),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Security deposit',
+                      style: TextStyle(
+                          fontSize: 11.5,
+                          color: Brand.muted,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 3),
+                  Text(has ? Money.format(unit.depositAmount) : 'None',
+                      style: display(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          fontFeatures: tabularNums)),
+                  if (sub != null) ...[
+                    const SizedBox(height: 2),
+                    Text(sub,
+                        style: TextStyle(
+                            fontSize: 11.5,
+                            color:
+                                refunded ? Brand.muted : Brand.paidText,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                ],
+              ),
+            ),
+            if (has)
+              InkWell(
+                onTap: () => _toggle(context, ledger),
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Brand.glassBg,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Brand.glassBorder),
+                  ),
+                  child: Text(refunded ? 'Mark held' : 'Refund',
+                      style: const TextStyle(
+                          color: Brand.orangeSoft,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12)),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggle(BuildContext context, LedgerProvider ledger) async {
+    final next = !unit.depositRefunded;
+    final ok = await showGlassDialog<bool>(
+      context,
+      (ctx) => GlassDialog(
+        title: next ? 'Refund deposit?' : 'Mark as held?',
+        content: Text(next
+            ? 'Mark the ${Money.format(unit.depositAmount)} deposit as '
+                'returned to ${unit.tenantName}.'
+            : 'Mark the ${Money.format(unit.depositAmount)} deposit as '
+                'currently held again.'),
+        actions: [
+          GlassDialogAction('Cancel',
+              onPressed: () => Navigator.pop(ctx, false)),
+          GlassDialogAction(next ? 'Refund' : 'Mark held',
+              primary: true, onPressed: () => Navigator.pop(ctx, true)),
+        ],
+      ),
+    );
+    if (ok == true) await ledger.setDepositRefunded(unit, next);
+  }
+}
+
+/// Variable per-month charges (electricity / water / service) for the unit,
+/// tracked separately from rent. Loads the selected month's row and offers an
+/// edit dialog. Reloads when the ledger changes or the month switches.
+class _ChargesSection extends StatefulWidget {
+  final int unitId;
+  final BsMonth month;
+  const _ChargesSection({required this.unitId, required this.month});
+
+  @override
+  State<_ChargesSection> createState() => _ChargesSectionState();
+}
+
+class _ChargesSectionState extends State<_ChargesSection> {
+  late final LedgerProvider _ledger;
+  late Future<Charge?> _future;
+  Charge? _last;
+
+  @override
+  void initState() {
+    super.initState();
+    _ledger = context.read<LedgerProvider>();
+    _future = _ledger.chargesFor(widget.unitId);
+    _ledger.addListener(_reload);
+  }
+
+  void _reload() {
+    if (mounted) {
+      setState(() => _future = _ledger.chargesFor(widget.unitId));
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChargesSection old) {
+    super.didUpdateWidget(old);
+    if (old.month != widget.month || old.unitId != widget.unitId) _reload();
+  }
+
+  @override
+  void dispose() {
+    _ledger.removeListener(_reload);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mode = context.watch<SettingsProvider>().calendar;
+    return FutureBuilder<Charge?>(
+      future: _future,
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.done) _last = snap.data;
+        final c = snap.hasData ? snap.data : _last;
+        final e = c?.electricity ?? 0;
+        final w = c?.water ?? 0;
+        final s = c?.service ?? 0;
+        final total = e + w + s;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Charges · ${widget.month.monthNameIn(mode)}',
+                      style: const TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: Brand.muted,
+                          letterSpacing: 0.2)),
+                ),
+                _SecondaryButton(
+                  icon: Icons.edit_outlined,
+                  label: total == 0 ? 'Add' : 'Edit',
+                  onTap: () => _edit(c),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: Brand.glassBg,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Brand.glassBorder),
+              ),
+              child: Column(
+                children: [
+                  _ChargeRow(
+                      icon: Icons.bolt_outlined,
+                      label: 'Electricity',
+                      amount: e),
+                  const _Hair(),
+                  _ChargeRow(
+                      icon: Icons.water_drop_outlined,
+                      label: 'Water',
+                      amount: w),
+                  const _Hair(),
+                  _ChargeRow(
+                      icon: Icons.handyman_outlined,
+                      label: 'Service / other',
+                      amount: s),
+                  const _Hair(),
+                  _ChargeRow(label: 'Total', amount: total, bold: true),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _edit(Charge? c) async {
+    String pre(int v) => v == 0 ? '' : v.toString();
+    final eCtrl = TextEditingController(text: pre(c?.electricity ?? 0));
+    final wCtrl = TextEditingController(text: pre(c?.water ?? 0));
+    final sCtrl = TextEditingController(text: pre(c?.service ?? 0));
+
+    final saved = await showGlassDialog<bool>(
+      context,
+      (ctx) => GlassDialog(
+        title: 'Charges · ${widget.month.monthName} ${widget.month.year}',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ChargeField(controller: eCtrl, label: 'Electricity'),
+            const SizedBox(height: 10),
+            _ChargeField(controller: wCtrl, label: 'Water'),
+            const SizedBox(height: 10),
+            _ChargeField(controller: sCtrl, label: 'Service / other'),
+          ],
+        ),
+        actions: [
+          GlassDialogAction('Cancel',
+              onPressed: () => Navigator.pop(ctx, false)),
+          GlassDialogAction('Save',
+              primary: true, onPressed: () => Navigator.pop(ctx, true)),
+        ],
+      ),
+    );
+    if (saved != true) return;
+    await _ledger.setCharges(
+      widget.unitId,
+      electricity: int.tryParse(eCtrl.text.trim()) ?? 0,
+      water: int.tryParse(wCtrl.text.trim()) ?? 0,
+      service: int.tryParse(sCtrl.text.trim()) ?? 0,
+    );
+  }
+}
+
+class _ChargeRow extends StatelessWidget {
+  final IconData? icon;
+  final String label;
+  final int amount;
+  final bool bold;
+  const _ChargeRow({
+    this.icon,
+    required this.label,
+    required this.amount,
+    this.bold = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 15, color: Brand.muted),
+            const SizedBox(width: 8),
+          ] else
+            const SizedBox(width: 23),
+          Expanded(
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: 13,
+                    color: bold ? Brand.text : Brand.muted,
+                    fontWeight: bold ? FontWeight.w700 : FontWeight.w500)),
+          ),
+          Text(amount == 0 && !bold ? '—' : Money.format(amount),
+              style: display(
+                  fontSize: bold ? 15 : 14,
+                  fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
+                  fontFeatures: tabularNums)),
+        ],
+      ),
+    );
+  }
+}
+
+class _Hair extends StatelessWidget {
+  const _Hair();
+  @override
+  Widget build(BuildContext context) =>
+      Divider(height: 1, thickness: 1, color: Brand.glassBorder);
+}
+
+class _ChargeField extends StatelessWidget {
+  final TextEditingController controller;
+  final String label;
+  const _ChargeField({required this.controller, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      keyboardType: TextInputType.number,
+      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      decoration: InputDecoration(
+        labelText: label,
+        prefixText: 'Rs ',
+        isDense: true,
+      ),
     );
   }
 }

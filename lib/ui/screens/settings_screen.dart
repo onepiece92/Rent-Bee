@@ -13,6 +13,7 @@ import '../../state/ledger_provider.dart';
 import '../../state/settings_provider.dart';
 import '../util/csv_share.dart';
 import '../widgets/glass.dart';
+import '../widgets/glass_dialog.dart';
 import '../widgets/toast.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -98,7 +99,7 @@ class SettingsScreen extends StatelessWidget {
                 _SettingTile(
                   icon: Icons.auto_awesome,
                   title: 'Generate demo data',
-                  subtitle: 'Replace with sample units & payments',
+                  subtitle: 'Replace with 3 years of sample history',
                   onTap: () => _generateDemo(context),
                 ),
                 const _Divider(),
@@ -165,11 +166,10 @@ class SettingsScreen extends StatelessWidget {
     final confirm = TextEditingController();
     final formKey = GlobalKey<FormState>();
 
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Brand.navy,
-        title: const Text('Change PIN'),
+    final saved = await showGlassDialog<bool>(
+      context,
+      (ctx) => GlassDialog(
+        title: 'Change PIN',
         content: Form(
           key: formKey,
           child: Column(
@@ -194,11 +194,11 @@ class SettingsScreen extends StatelessWidget {
           ),
         ),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Brand.orange),
+          GlassDialogAction('Cancel',
+              onPressed: () => Navigator.pop(ctx, false)),
+          GlassDialogAction(
+            'Save',
+            primary: true,
             onPressed: () async {
               if (!formKey.currentState!.validate()) return;
               if (!await auth.unlock(current.text.trim())) {
@@ -210,7 +210,6 @@ class SettingsScreen extends StatelessWidget {
               await auth.setPin(next.text.trim());
               if (ctx.mounted) Navigator.pop(ctx, true);
             },
-            child: const Text('Save'),
           ),
         ],
       ),
@@ -260,10 +259,7 @@ class SettingsScreen extends StatelessWidget {
     final ledger = context.read<LedgerProvider>();
     final overlay = Overlay.of(context, rootOverlay: true);
     final year = ledger.month.year;
-    final box = context.findRenderObject();
-    final origin = (box is RenderBox && box.hasSize)
-        ? box.localToGlobal(Offset.zero) & box.size
-        : null;
+    final origin = shareOriginFor(context);
     try {
       final csv = await ledger.repo.exportCsvRange(year, 1, 12);
       final name = 'rent-bee-$year-full.csv';
@@ -275,17 +271,19 @@ class SettingsScreen extends StatelessWidget {
 
   Future<void> _generateDemo(BuildContext context) async {
     final ledger = context.read<LedgerProvider>();
+    // Grow demo rents at the configured rate (fall back handled in the repo).
+    final pct = context.read<SettingsProvider>().annualRaisePercent;
     final overlay = Overlay.of(context, rootOverlay: true);
     final ok = await _confirm(
       context,
       title: 'Generate demo data?',
-      message:
-          'This replaces all current units and payments with a sample dataset.',
+      message: 'This replaces all current units and payments with 3 years of '
+          'sample history (rents grow each anniversary).',
       confirmLabel: 'Generate',
     );
     if (ok != true) return;
-    await ledger.generateDemoData();
-    showToastOn(overlay, 'Demo data generated');
+    await ledger.generateDemoData(pct);
+    showToastOn(overlay, '3 years of demo data generated');
   }
 
   Future<void> _eraseAll(BuildContext context) async {
@@ -316,9 +314,9 @@ class SettingsScreen extends StatelessWidget {
     final sampleRent = ledger.totalCount > 0
         ? ledger.allUnitsByCode.first.unit.monthlyRent
         : 18000;
-    final percent = await showDialog<double>(
-      context: context,
-      builder: (_) => _RaisePercentDialog(
+    final percent = await showGlassDialog<double>(
+      context,
+      (_) => _RaisePercentDialog(
         initial: settings.annualRaisePercent,
         sampleRent: sampleRent,
       ),
@@ -340,22 +338,19 @@ class SettingsScreen extends StatelessWidget {
     required String confirmLabel,
     bool destructive = false,
   }) {
-    return showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Brand.navy,
-        title: Text(title),
+    return showGlassDialog<bool>(
+      context,
+      (ctx) => GlassDialog(
+        title: title,
         content: Text(message),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(
-                backgroundColor:
-                    destructive ? Colors.redAccent : Brand.orange),
+          GlassDialogAction('Cancel',
+              onPressed: () => Navigator.pop(ctx, false)),
+          GlassDialogAction(
+            confirmLabel,
+            primary: !destructive,
+            destructive: destructive,
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text(confirmLabel),
           ),
         ],
       ),
@@ -476,9 +471,8 @@ class _RaisePercentDialogState extends State<_RaisePercentDialog> {
           'Recorded payments stay unchanged.';
     }
 
-    return AlertDialog(
-      backgroundColor: Brand.navy,
-      title: const Text('Annual rent increase'),
+    return GlassDialog(
+      title: 'Annual rent increase',
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -516,17 +510,15 @@ class _RaisePercentDialogState extends State<_RaisePercentDialog> {
         ],
       ),
       actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel')),
-        FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: Brand.orange),
-          onPressed: pct == null ? null : () => Navigator.pop(context, pct),
-          child: Text(pct == null
+        GlassDialogAction('Cancel', onPressed: () => Navigator.pop(context)),
+        GlassDialogAction(
+          pct == null
               ? 'Save'
               : pct == 0
                   ? 'Turn off'
-                  : 'Set ${fmtPercent(pct)}%'),
+                  : 'Set ${fmtPercent(pct)}%',
+          primary: true,
+          onPressed: pct == null ? null : () => Navigator.pop(context, pct),
         ),
       ],
     );
