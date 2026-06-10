@@ -6,24 +6,25 @@ import '../../state/auth_provider.dart';
 import '../widgets/glass.dart';
 import '../widgets/pin_field.dart';
 
-/// Returning-user unlock. The PIN was set once during onboarding (after phone
-/// OTP verification); this screen runs fully offline. First-run PIN creation
-/// lives in [SetPinScreen].
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+/// Onboarding step 2: create the local PIN, after the phone has been verified.
+/// Setting the PIN unlocks the app; every later launch uses [LoginScreen].
+class SetPinScreen extends StatefulWidget {
+  const SetPinScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  State<SetPinScreen> createState() => _SetPinScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _SetPinScreenState extends State<SetPinScreen> {
   final _pin = TextEditingController();
+  final _confirm = TextEditingController();
   String? _error;
   bool _busy = false;
 
   @override
   void dispose() {
     _pin.dispose();
+    _confirm.dispose();
     super.dispose();
   }
 
@@ -40,15 +41,14 @@ class _LoginScreenState extends State<LoginScreen> {
       });
       return;
     }
-    final ok = await auth.unlock(pin);
-    if (!ok) {
+    if (pin != _confirm.text.trim()) {
       setState(() {
-        _error = 'Incorrect PIN';
+        _error = 'PINs do not match';
         _busy = false;
       });
       return;
     }
-    // Redirect handled by go_router on auth change.
+    await auth.setPin(pin); // unlocks + notifies; go_router redirects to '/'.
   }
 
   @override
@@ -69,27 +69,28 @@ class _LoginScreenState extends State<LoginScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Icon(Icons.storefront_rounded,
+                      const Icon(Icons.lock_outline_rounded,
                           color: Brand.orange, size: 44),
                       const SizedBox(height: 14),
                       Text(
-                        'Rent Bee',
+                        'Set a PIN',
                         textAlign: TextAlign.center,
-                        style: display(fontSize: 30, fontWeight: FontWeight.w600),
+                        style: display(fontSize: 28, fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 6),
-                      const Text(
-                        'Enter your PIN to continue',
+                      Text(
+                        auth.phone == null
+                            ? 'This PIN unlocks Rent Bee on every launch'
+                            : 'Verified ${auth.phone}. This PIN unlocks Rent Bee '
+                                'on every launch.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Brand.muted),
+                        style: const TextStyle(color: Brand.muted),
                       ),
                       const SizedBox(height: 24),
                       PinField(
-                        controller: _pin,
-                        label: 'PIN',
-                        autofocus: true,
-                        onSubmitted: _busy ? null : () => _submit(auth),
-                      ),
+                          controller: _pin, label: 'PIN', autofocus: true),
+                      const SizedBox(height: 14),
+                      PinField(controller: _confirm, label: 'Confirm PIN'),
                       if (_error != null) ...[
                         const SizedBox(height: 12),
                         Text(_error!,
@@ -104,7 +105,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               borderRadius: BorderRadius.circular(14)),
                         ),
                         onPressed: _busy ? null : () => _submit(auth),
-                        child: const Text('Unlock',
+                        child: const Text('Create PIN',
                             style: TextStyle(
                                 fontSize: 16, fontWeight: FontWeight.w600)),
                       ),

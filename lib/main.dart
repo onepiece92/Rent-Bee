@@ -1,3 +1,4 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,6 +8,7 @@ import 'app/theme.dart';
 import 'data/database.dart';
 import 'data/ledger_repository.dart';
 import 'domain/bs_calendar.dart';
+import 'firebase_options.dart';
 import 'state/auth_provider.dart';
 import 'state/ledger_provider.dart';
 import 'state/settings_provider.dart';
@@ -17,6 +19,9 @@ const _initialMonth = BsMonth(2082, 2);
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
     final prefs = await SharedPreferences.getInstance();
     final auth = await AuthProvider.load(prefs);
     final settings = SettingsProvider(prefs);

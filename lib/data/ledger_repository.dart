@@ -354,9 +354,17 @@ class LedgerRepository {
     );
   }
 
-  /// Recent paid/unpaid per month for a unit, newest first.
+  /// Recent paid/partial/unpaid per month for a unit, newest first. Each entry
+  /// carries the amount collected plus the unit's current rent as the expected,
+  /// so the UI can distinguish a full payment from a partial one. (The 6-month
+  /// window is shorter than the annual escalation cycle, so current rent is the
+  /// right yardstick for these months in practice.)
   Future<List<HistoryEntry>> history(int unitId, BsMonth from,
       {int months = 6}) async {
+    final unit = await (db.select(db.units)
+          ..where((u) => u.id.equals(unitId)))
+        .getSingleOrNull();
+    final expected = unit?.monthlyRent ?? 0;
     final entries = <HistoryEntry>[];
     var cursor = from;
     for (var i = 0; i < months; i++) {
@@ -366,12 +374,11 @@ class LedgerRepository {
                 p.year.equals(cursor.year) &
                 p.month.equals(cursor.month)))
           .get());
-      final paid = rows.isNotEmpty;
       entries.add(HistoryEntry(
         year: cursor.year,
         month: cursor.month,
-        paid: paid,
-        amount: paid ? rows.first.amount : null,
+        amount: rows.isNotEmpty ? rows.first.amount : 0,
+        expected: expected,
       ));
       cursor = cursor.previous();
     }

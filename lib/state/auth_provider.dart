@@ -5,7 +5,12 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Single-owner local lock.
+/// Single-owner local lock with a one-time phone identity.
+///
+/// Onboarding is two staged steps: a phone number is verified once via Firebase
+/// OTP ([recordPhoneVerification]), then a PIN is set ([setPin]). After that the
+/// app is offline-first — every later launch unlocks with the local PIN alone
+/// and never touches Firebase.
 ///
 /// The PIN is stretched with PBKDF2-HMAC-SHA256; the salt + derived hash + work
 /// factor are kept in shared_preferences. No platform keychain is used — the
@@ -19,6 +24,8 @@ class AuthProvider extends ChangeNotifier {
   static const _kHash = 'pin_hash';
   static const _kSalt = 'pin_salt';
   static const _kIterations = 'pin_iterations';
+  static const _kPhone = 'phone_number';
+  static const _kUid = 'phone_uid';
 
   /// PBKDF2 work factor. Pure-Dart HMAC caps how high this can go before unlock
   /// feels sluggish; 100k keeps a single derive well under ~300ms on a phone
@@ -32,16 +39,28 @@ class AuthProvider extends ChangeNotifier {
 
   final SharedPreferences _prefs;
 
-  // Cached at load() so hasPin stays synchronous for routing/build.
+  // Cached at load() so hasPin/phoneVerified stay synchronous for routing/build.
   String? _hash;
   String? _salt;
   int _storedIterations = _iterations;
+  String? _phone;
+  String? _uid;
   bool _unlocked = false;
 
   AuthProvider._(this._prefs);
 
   bool get unlocked => _unlocked;
   bool get hasPin => _hash != null;
+
+  /// True once the owner's phone number has been verified via Firebase OTP.
+  bool get phoneVerified => _phone != null;
+
+  /// The verified phone number in E.164 form (e.g. `+9779801234501`), or null.
+  String? get phone => _phone;
+
+  /// The Firebase uid captured at verification, or null. Retained for a future
+  /// cloud-sync/backup feature; day-to-day unlock does not use it.
+  String? get uid => _uid;
 
   /// Loads PIN material from shared_preferences. A pre-PBKDF2 hash (present but
   /// with no stored iteration count) is treated as legacy single-round SHA-256
@@ -53,7 +72,37 @@ class AuthProvider extends ChangeNotifier {
     final iters = prefs.getInt(_kIterations);
     auth._storedIterations =
         (auth._hash != null && iters == null) ? _legacyMarker : (iters ?? _iterations);
+    auth._phone = prefs.getString(_kPhone);
+    auth._uid = prefs.getString(_kUid);
     return auth;
+  }
+
+  /// Onboarding step 1: persist the phone identity captured from a successful
+  /// Firebase OTP verification. Deliberately does **not** unlock — the owner
+  /// still sets a PIN ([setPin]) before reaching the app.
+  Future<void> recordPhoneVerification(String phoneE164, String uid) async {
+    await _prefs.setString(_kPhone, phoneE164);
+    await _prefs.setString(_kUid, uid);
+    _phone = phoneE164;
+    _uid = uid;
+    notifyListeners();
+  }
+
+  /// Full sign-out / re-onboard: clears the phone identity and the PIN, then
+  /// locks. The next launch starts again at phone verification.
+  Future<void> resetIdentity() async {
+    await _prefs.remove(_kPhone);
+    await _prefs.remove(_kUid);
+    await _prefs.remove(_kHash);
+    await _prefs.remove(_kSalt);
+    await _prefs.remove(_kIterations);
+    _phone = null;
+    _uid = null;
+    _hash = null;
+    _salt = null;
+    _storedIterations = _iterations;
+    _unlocked = false;
+    notifyListeners();
   }
 
   /// First-run (or change-PIN): derive and store fresh PBKDF2 material.

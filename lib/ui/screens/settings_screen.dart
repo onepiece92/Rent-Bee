@@ -23,6 +23,7 @@ class SettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final ledger = context.watch<LedgerProvider>();
     final settings = context.watch<SettingsProvider>();
+    final auth = context.watch<AuthProvider>();
 
     return SafeArea(
       bottom: false,
@@ -57,6 +58,16 @@ class SettingsScreen extends StatelessWidget {
                   title: 'Lock now',
                   subtitle: 'Return to the PIN screen',
                   onTap: () => context.read<AuthProvider>().lock(),
+                ),
+                const _Divider(),
+                _SettingTile(
+                  icon: Icons.logout_rounded,
+                  title: 'Sign out',
+                  subtitle: auth.phone == null
+                      ? 'Remove this device and re-verify your phone'
+                      : 'Signed in as ${auth.phone} · tap to re-verify',
+                  iconColor: Colors.redAccent,
+                  onTap: () => _signOut(context),
                 ),
               ],
             ),
@@ -301,6 +312,23 @@ class SettingsScreen extends StatelessWidget {
     if (ok != true) return;
     await ledger.eraseAllData();
     showToastOn(overlay, 'All data erased');
+  }
+
+  /// Signs out: clears the verified phone identity and the PIN, sending the
+  /// owner back through phone OTP onboarding. Local ledger data is untouched.
+  Future<void> _signOut(BuildContext context) async {
+    final auth = context.read<AuthProvider>();
+    final ok = await _confirm(
+      context,
+      title: 'Sign out?',
+      message:
+          'You\'ll need to verify your phone number and set a new PIN to get '
+          'back in. Your units and payment history stay on this device.',
+      confirmLabel: 'Sign out',
+      destructive: true,
+    );
+    if (ok != true) return;
+    await auth.resetIdentity(); // go_router redirects to phone onboarding.
   }
 
   /// Bulk annual lease escalation: raises every unit's monthly rent by [percent]%.

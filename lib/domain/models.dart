@@ -141,13 +141,28 @@ class PeriodSummary {
 class HistoryEntry {
   final int year;
   final int month;
-  final bool paid;
-  final int? amount;
+
+  /// Amount collected for this month (0 if nothing recorded).
+  final int amount;
+
+  /// Rent expected for this month — lets the UI tell partial from full.
+  final int expected;
 
   const HistoryEntry({
     required this.year,
     required this.month,
-    required this.paid,
-    this.amount,
+    required this.amount,
+    required this.expected,
   });
+
+  /// Fraction of the expected rent collected, clamped to 0..1.
+  double get progress => expected > 0
+      ? (amount / expected).clamp(0, 1).toDouble()
+      : (amount > 0 ? 1 : 0);
+
+  /// Paid in full — the collected amount covers the expected rent.
+  bool get isPaid => amount > 0 && amount >= expected;
+
+  /// Something was collected, but less than the expected rent.
+  bool get isPartial => amount > 0 && amount < expected;
 }

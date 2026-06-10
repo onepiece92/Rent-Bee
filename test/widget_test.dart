@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:unit_ledger/data/database.dart';
 import 'package:unit_ledger/data/ledger_repository.dart';
 import 'package:unit_ledger/domain/bs_calendar.dart';
+import 'package:unit_ledger/domain/models.dart';
 import 'package:unit_ledger/domain/money.dart';
 
 void main() {
@@ -252,6 +253,188 @@ void main() {
           (await repo.paymentsForMonth(2082, 6)).any((p) => p.unitId == c02.id),
           isFalse);
       expect(await repo.chargesFor(c02.id, 2082, 6), isNull);
+    });
+  });
+
+  group('Partial payments', () {
+    late AppDatabase db;
+    late LedgerRepository repo;
+
+    setUp(() {
+      db = AppDatabase.forTesting(NativeDatabase.memory());
+      repo = LedgerRepository(db);
+    });
+
+    tearDown(() => db.close());
+
+    Future<Unit> makeUnit(String code, int rent) async {
+      final id = await repo.createUnit(UnitsCompanion.insert(
+        code: code,
+        tenantName: code,
+        monthlyRent: rent,
+      ));
+      return (db.select(db.units)..where((s) => s.id.equals(id))).getSingle();
+    }
+
+    test('a partial payment is partial, not paid; remaining is the shortfall',
+        () async {
+      final unit = await makeUnit('P-01', 10000);
+      await repo.markPaid(unit, 2082, 2, amount: 4000);
+
+      final row = (await repo.rowsForMonth(2082, 2)).single;
+      expect(row.status, PayStatus.partial);
+      expect(row.isPaid, isFalse);
+      expect(row.isPartial, isTrue);
+      expect(row.paidAmount, 4000);
+      expect(row.remaining, 6000);
+
+      final s = await repo.summary(2082, 2);
+      expect(s.collected, 4000);
+      expect(s.pending, 6000);
+      expect(s.paidCount, 0); // a partial does not count as settled
+      expect(s.partialCount, 1);
+    });
+
+    test('topping a partial up to full flips it to paid', () async {
+      final unit = await makeUnit('P-02', 10000);
+      await repo.markPaid(unit, 2082, 2, amount: 4000);
+      // markPaid upserts on (unit, year, month): the second call replaces.
+      await repo.markPaid(unit, 2082, 2, amount: 10000);
+
+      final row = (await repo.rowsForMonth(2082, 2)).single;
+      expect(row.status, PayStatus.paid);
+      expect(row.remaining, 0);
+
+      final s = await repo.summary(2082, 2);
+      expect(s.paidCount, 1);
+      expect(s.partialCount, 0);
+      expect(s.collected, 10000);
+      // No duplicate row was created by the second markPaid.
+      expect((await repo.paymentsForMonth(2082, 2)).length, 1);
+    });
+
+    test('overpayment clamps pending to 0 and progress to 100%', () async {
+      // Captured at 15000, then rent lowered to 10000 -> collected > expected.
+      final unit = await makeUnit('P-03', 15000);
+      await repo.markPaid(unit, 2082, 2); // amount defaults to 15000
+      await repo.updateUnit(unit.copyWith(monthlyRent: 10000));
+
+      final row = (await repo.rowsForMonth(2082, 2)).single;
+      expect(row.status, PayStatus.paid);
+      expect(row.remaining, 0); // floored, never negative
+
+      final s = await repo.summary(2082, 2);
+      expect(s.expected, 10000);
+      expect(s.collected, 15000);
+      expect(s.pending, 0); // floored, never negative
+      expect(s.progress, 1.0); // clamped
+      expect(s.percent, 100);
+    });
+
+    test('a zero-amount payment row reads as pending, not partial', () async {
+      final unit = await makeUnit('P-04', 10000);
+      await repo.markPaid(unit, 2082, 2, amount: 0);
+
+      final row = (await repo.rowsForMonth(2082, 2)).single;
+      expect(row.status, PayStatus.pending);
+
+      final s = await repo.summary(2082, 2);
+      expect(s.collected, 0);
+      expect(s.paidCount, 0);
+      expect(s.partialCount, 0);
+    });
+
+    test('empty / no active units: summary guards divide-by-zero', () async {
+      final s = await repo.summary(2082, 2);
+      expect(s.expected, 0);
+      expect(s.progress, 0);
+      expect(s.percent, 0);
+      expect(s.pending, 0);
+    });
+  });
+
+  group('BS <-> AD calendar helpers', () {
+    test('bsYearMonth(adForBsMonthStart(y, m)) round-trips', () {
+      for (final m in [1, 2, 6, 12]) {
+        final ad = adForBsMonthStart(2082, m);
+        final bs = bsYearMonth(ad);
+        expect(bs.year, 2082);
+        expect(bs.month, m);
+      }
+    });
+
+    test('adForBsMonthStart is the first day of the BS month', () {
+      // The Gregorian date labels as BS day 1 of that month.
+      expect(dateLabel(adForBsMonthStart(2082, 2), CalendarMode.bs),
+          startsWith('1 '));
+    });
+
+    test('monthNameIn(AD) maps Baishakh to April, Jestha to May', () {
+      // The BS year opens in mid-April; Baishakh's first day is an April date.
+      expect(const BsMonth(2082, 1).monthNameIn(CalendarMode.ad), 'April');
+      expect(const BsMonth(2082, 2).monthNameIn(CalendarMode.ad), 'May');
+      // BS mode keeps the Nepali name.
+      expect(const BsMonth(2082, 2).monthNameIn(CalendarMode.bs), 'Jestha');
+    });
+
+    test('dateLabel formats per calendar mode', () {
+      final d = DateTime(2025, 6, 15);
+      expect(dateLabel(d, CalendarMode.ad), '15 Jun 2025');
+      // First day of Jestha 2082 labels as "1 Jestha 2082" in BS.
+      expect(dateLabel(adForBsMonthStart(2082, 2), CalendarMode.bs),
+          '1 Jestha 2082');
+    });
+
+    test('labelIn renders month + year for each mode', () {
+      expect(const BsMonth(2082, 2).labelIn(CalendarMode.bs), 'Jestha 2082');
+      expect(const BsMonth(2082, 2).labelIn(CalendarMode.ad), 'May 2025');
+    });
+  });
+
+  group('Cascade & reset', () {
+    late AppDatabase db;
+    late LedgerRepository repo;
+
+    setUp(() {
+      db = AppDatabase.forTesting(NativeDatabase.memory());
+      repo = LedgerRepository(db);
+    });
+
+    tearDown(() => db.close());
+
+    Future<Unit> makeUnit(String code) async {
+      final id = await repo.createUnit(UnitsCompanion.insert(
+        code: code,
+        tenantName: code,
+        monthlyRent: 10000,
+      ));
+      return (db.select(db.units)..where((s) => s.id.equals(id))).getSingle();
+    }
+
+    test('deleting a unit cascades its payments', () async {
+      final a = await makeUnit('A-01');
+      final b = await makeUnit('A-02');
+      await repo.markPaid(a, 2082, 2);
+      await repo.markPaid(b, 2082, 2);
+
+      await repo.deleteUnit(a.id);
+
+      final remaining = await db.select(db.payments).get();
+      expect(remaining.length, 1);
+      expect(remaining.single.unitId, b.id); // only B's payment survives
+      expect((await repo.allUnits()).single.id, b.id);
+    });
+
+    test('eraseAll clears units, payments, and charges', () async {
+      final a = await makeUnit('A-01');
+      await repo.markPaid(a, 2082, 2);
+      await repo.setCharges(a.id, 2082, 2, electricity: 500, water: 200);
+
+      await repo.eraseAll();
+
+      expect(await repo.allUnits(), isEmpty);
+      expect(await db.select(db.payments).get(), isEmpty);
+      expect(await db.select(db.charges).get(), isEmpty); // FK cascade
     });
   });
 }

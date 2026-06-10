@@ -428,42 +428,103 @@ class _HistoryStripState extends State<_HistoryStrip> {
         return Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            for (final e in entries)
-              Column(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: e.paid
-                          ? Brand.paid.withValues(alpha: 0.95)
-                          : Colors.white.withValues(alpha: 0.07),
-                      borderRadius: BorderRadius.circular(11),
-                      border: Border.all(
-                          color: e.paid
-                              ? Colors.transparent
-                              : Brand.glassBorder),
-                    ),
-                    child: e.paid
-                        ? const Icon(Icons.check,
-                            size: 14, color: Color(0xFF053026))
-                        : const Text('–',
-                            style: TextStyle(
-                                color: Brand.muted,
-                                fontWeight: FontWeight.w700)),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(BsMonth(e.year, e.month).shortMonthNameIn(mode),
-                      style: const TextStyle(
-                          fontSize: 11,
-                          color: Brand.muted,
-                          fontWeight: FontWeight.w600)),
-                ],
-              ),
+            for (final e in entries) _HistoryCell(entry: e, mode: mode),
           ],
         );
       },
+    );
+  }
+}
+
+/// One month in the history strip: a status chip above its short month label.
+class _HistoryCell extends StatelessWidget {
+  final HistoryEntry entry;
+  final CalendarMode mode;
+  const _HistoryCell({required this.entry, required this.mode});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _HistoryChip(entry: entry),
+        const SizedBox(height: 6),
+        Text(BsMonth(entry.year, entry.month).shortMonthNameIn(mode),
+            style: const TextStyle(
+                fontSize: 11, color: Brand.muted, fontWeight: FontWeight.w600)),
+      ],
+    );
+  }
+}
+
+/// Status chip: full = solid green + check, partial = green filled from the
+/// left in proportion to the fraction paid, unpaid = faint with a dash.
+class _HistoryChip extends StatelessWidget {
+  final HistoryEntry entry;
+  const _HistoryChip({required this.entry});
+
+  static const _size = 36.0;
+  static const _radius = BorderRadius.all(Radius.circular(11));
+
+  @override
+  Widget build(BuildContext context) {
+    if (entry.isPaid) {
+      return Container(
+        width: _size,
+        height: _size,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Brand.paid.withValues(alpha: 0.95),
+          borderRadius: _radius,
+        ),
+        child: const Icon(Icons.check, size: 14, color: Color(0xFF053026)),
+      );
+    }
+    if (entry.isPartial) {
+      return SizedBox(
+        width: _size,
+        height: _size,
+        child: ClipRRect(
+          borderRadius: _radius,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: ColoredBox(color: Colors.white.withValues(alpha: 0.07)),
+              ),
+              // Green fill from the left, proportional to the fraction paid.
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FractionallySizedBox(
+                  widthFactor: entry.progress,
+                  heightFactor: 1,
+                  child: ColoredBox(color: Brand.paid.withValues(alpha: 0.85)),
+                ),
+              ),
+              const Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: _radius,
+                    border: Border.fromBorderSide(
+                        BorderSide(color: Brand.glassBorder)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    // unpaid
+    return Container(
+      width: _size,
+      height: _size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.07),
+        borderRadius: _radius,
+        border: Border.all(color: Brand.glassBorder),
+      ),
+      child: const Text('–',
+          style: TextStyle(color: Brand.muted, fontWeight: FontWeight.w700)),
     );
   }
 }
