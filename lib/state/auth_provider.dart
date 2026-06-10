@@ -46,11 +46,15 @@ class AuthProvider extends ChangeNotifier {
   String? _phone;
   String? _uid;
   bool _unlocked = false;
+  bool _guest = false;
 
   AuthProvider._(this._prefs);
 
   bool get unlocked => _unlocked;
   bool get hasPin => _hash != null;
+
+  /// True during a transient guest test session (see [enterGuestMode]).
+  bool get isGuest => _guest;
 
   /// True once the owner's phone number has been verified via Firebase OTP.
   bool get phoneVerified => _phone != null;
@@ -102,6 +106,7 @@ class AuthProvider extends ChangeNotifier {
     _salt = null;
     _storedIterations = _iterations;
     _unlocked = false;
+    _guest = false;
     notifyListeners();
   }
 
@@ -140,6 +145,17 @@ class AuthProvider extends ChangeNotifier {
 
   void lock() {
     _unlocked = false;
+    notifyListeners();
+  }
+
+  /// Transient guest session for local testing — bypasses phone OTP and the PIN
+  /// and unlocks straight into the app. Intentionally **not persisted**: a cold
+  /// start drops back to phone onboarding. Only ever invoked from a debug-gated
+  /// button (see [PhoneLoginScreen]).
+  void enterGuestMode() {
+    _guest = true;
+    _phone = 'Guest (test)';
+    _unlocked = true;
     notifyListeners();
   }
 

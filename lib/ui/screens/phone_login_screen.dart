@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -212,6 +213,17 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
                         TextButton(
                           onPressed: _editNumber,
                           child: const Text('Change number',
+                              style: TextStyle(color: Brand.muted)),
+                        ),
+                      ],
+                      // Debug-only shortcut to skip OTP + PIN while testing
+                      // (e.g. on macOS where phone auth uses reCAPTCHA). Never
+                      // compiled into release builds.
+                      if (kDebugMode && !isOtp && !_busy) ...[
+                        const SizedBox(height: 8),
+                        TextButton(
+                          onPressed: () => auth.enterGuestMode(),
+                          child: const Text('Continue as guest (debug)',
                               style: TextStyle(color: Brand.muted)),
                         ),
                       ],
