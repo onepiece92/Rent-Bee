@@ -137,10 +137,14 @@ class _Grain extends StatelessWidget {
   const _Grain();
   @override
   Widget build(BuildContext context) {
+    // RepaintBoundary isolates the static grain into its own layer so the
+    // animated orb sibling's repaints don't re-run _GrainPainter's ~35k circles.
     return IgnorePointer(
-      child: Opacity(
-        opacity: 0.25,
-        child: CustomPaint(painter: _GrainPainter()),
+      child: RepaintBoundary(
+        child: Opacity(
+          opacity: 0.25,
+          child: CustomPaint(painter: _GrainPainter()),
+        ),
       ),
     );
   }
@@ -171,6 +175,11 @@ class GlassPanel extends StatelessWidget {
   final VoidCallback? onTap;
   final bool sheen;
 
+  /// Live backdrop blur. The translucent navy fill reads as glass on its own, so
+  /// list tiles pass `blur: false` — a live [BackdropFilter] per row is a major
+  /// scroll-jank source (N blur layers). Keep it on for hero/standalone panels.
+  final bool blur;
+
   const GlassPanel({
     super.key,
     required this.child,
@@ -178,11 +187,55 @@ class GlassPanel extends StatelessWidget {
     this.borderRadius,
     this.onTap,
     this.sheen = false,
+    this.blur = true,
   });
 
   @override
   Widget build(BuildContext context) {
     final radius = borderRadius ?? BorderRadius.circular(22);
+
+    final inner = DecoratedBox(
+      decoration: BoxDecoration(
+        color: Brand.glassBg,
+        borderRadius: radius,
+        border: Border.all(color: Brand.glassBorder),
+      ),
+      child: Stack(
+        children: [
+          if (sheen)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: FractionallySizedBox(
+                widthFactor: 1,
+                child: Container(
+                  height: 90,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.white.withValues(alpha: 0.16),
+                        Colors.white.withValues(alpha: 0.0),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: radius,
+              child: Padding(padding: padding, child: child),
+            ),
+          ),
+        ],
+      ),
+    );
+
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: radius,
@@ -196,51 +249,13 @@ class GlassPanel extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: radius,
-        child: BackdropFilter(
-          filter:
-              ImageFilter.blur(sigmaX: Brand.glassBlur, sigmaY: Brand.glassBlur),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: Brand.glassBg,
-              borderRadius: radius,
-              border: Border.all(color: Brand.glassBorder),
-            ),
-            child: Stack(
-              children: [
-                if (sheen)
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: FractionallySizedBox(
-                      widthFactor: 1,
-                      child: Container(
-                        height: 90,
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.white.withValues(alpha: 0.16),
-                              Colors.white.withValues(alpha: 0.0),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: onTap,
-                    borderRadius: radius,
-                    child: Padding(padding: padding, child: child),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+        child: blur
+            ? BackdropFilter(
+                filter: ImageFilter.blur(
+                    sigmaX: Brand.glassBlur, sigmaY: Brand.glassBlur),
+                child: inner,
+              )
+            : inner,
       ),
     );
   }

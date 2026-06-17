@@ -39,6 +39,10 @@ class AuthProvider extends ChangeNotifier {
 
   final SharedPreferences _prefs;
 
+  /// PBKDF2 derivation, injectable so tests can substitute a fast or failing
+  /// implementation without spawning a real isolate. Defaults to [_computeDerive].
+  final Future<String> Function(String pin, String salt, int iterations) _derive;
+
   // Cached at load() so hasPin/phoneVerified stay synchronous for routing/build.
   String? _hash;
   String? _salt;
@@ -48,7 +52,26 @@ class AuthProvider extends ChangeNotifier {
   bool _unlocked = false;
   bool _guest = false;
 
-  AuthProvider._(this._prefs);
+  AuthProvider._(this._prefs, this._derive);
+
+  /// Builds an instance with state set directly, for widget/unit tests. [derive]
+  /// lets a test force success, a wrong hash, or a thrown error.
+  @visibleForTesting
+  factory AuthProvider.forTest(
+    SharedPreferences prefs,
+    Future<String> Function(String, String, int) derive, {
+    String? hash,
+    String? salt,
+    int iterations = _iterations,
+    String? phone,
+  }) {
+    final auth = AuthProvider._(prefs, derive);
+    auth._hash = hash;
+    auth._salt = salt;
+    auth._storedIterations = iterations;
+    auth._phone = phone;
+    return auth;
+  }
 
   bool get unlocked => _unlocked;
   bool get hasPin => _hash != null;
@@ -69,8 +92,11 @@ class AuthProvider extends ChangeNotifier {
   /// Loads PIN material from shared_preferences. A pre-PBKDF2 hash (present but
   /// with no stored iteration count) is treated as legacy single-round SHA-256
   /// and transparently re-hashed on the next successful [unlock].
-  static Future<AuthProvider> load(SharedPreferences prefs) async {
-    final auth = AuthProvider._(prefs);
+  static Future<AuthProvider> load(
+    SharedPreferences prefs, {
+    Future<String> Function(String, String, int)? derive,
+  }) async {
+    final auth = AuthProvider._(prefs, derive ?? _computeDerive);
     auth._hash = prefs.getString(_kHash);
     auth._salt = prefs.getString(_kSalt);
     final iters = prefs.getInt(_kIterations);
@@ -167,8 +193,9 @@ class AuthProvider extends ChangeNotifier {
     return base64Url.encode(List<int>.generate(16, (_) => r.nextInt(256)));
   }
 
-  /// Stretch the PIN off the UI thread; returns the base64 derived key.
-  static Future<String> _derive(String pin, String salt, int iterations) {
+  /// Stretch the PIN off the UI thread; returns the base64 derived key. This is
+  /// the default [_derive] implementation injected at [load].
+  static Future<String> _computeDerive(String pin, String salt, int iterations) {
     return compute(_pbkdf2Worker, <String, Object>{
       'pin': pin,
       'salt': salt,

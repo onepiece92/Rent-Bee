@@ -40,15 +40,26 @@ class _LoginScreenState extends State<LoginScreen> {
       });
       return;
     }
-    final ok = await auth.unlock(pin);
-    if (!ok) {
-      setState(() {
-        _error = 'Incorrect PIN';
-        _busy = false;
-      });
-      return;
+    try {
+      final ok = await auth.unlock(pin);
+      if (!ok && mounted) {
+        setState(() {
+          _error = 'Incorrect PIN';
+          _busy = false;
+        });
+      }
+      // On success, go_router redirects on the auth change and disposes this
+      // screen — leaving _busy true is fine since the button is gone.
+    } catch (_) {
+      // PIN derivation runs in an isolate; if it fails, re-enable the button
+      // and surface an error instead of leaving it spinning forever.
+      if (mounted) {
+        setState(() {
+          _error = 'Something went wrong. Please try again.';
+          _busy = false;
+        });
+      }
     }
-    // Redirect handled by go_router on auth change.
   }
 
   @override

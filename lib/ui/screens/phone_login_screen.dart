@@ -56,6 +56,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
       _phoneE164 = e164;
     });
     try {
+      await PhoneAuthService.ensureInitialized();
       await _service.verifyPhoneNumber(
         phoneE164: e164,
         onCodeSent: (verificationId) {
@@ -97,6 +98,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
       _busy = true;
     });
     try {
+      await PhoneAuthService.ensureInitialized();
       final user = await _service.confirmOtp(id, code);
       await _recordAndAdvance(auth, user);
     } on FirebaseAuthException catch (e) {

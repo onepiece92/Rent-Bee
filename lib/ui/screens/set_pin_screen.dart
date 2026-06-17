@@ -48,7 +48,18 @@ class _SetPinScreenState extends State<SetPinScreen> {
       });
       return;
     }
-    await auth.setPin(pin); // unlocks + notifies; go_router redirects to '/'.
+    try {
+      await auth.setPin(pin); // unlocks + notifies; go_router redirects to '/'.
+    } catch (_) {
+      // PIN derivation runs in an isolate; on failure re-enable the button and
+      // show an error rather than leaving the user stuck mid-onboarding.
+      if (mounted) {
+        setState(() {
+          _error = 'Could not save your PIN. Please try again.';
+          _busy = false;
+        });
+      }
+    }
   }
 
   @override

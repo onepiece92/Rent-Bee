@@ -15,9 +15,9 @@ Rect? shareOriginFor(BuildContext context) {
   return box.localToGlobal(Offset.zero) & box.size;
 }
 
-/// Shares [csv] as an actual `.csv` file named [fileName] via the system
-/// share sheet, so the user can save it to Files/Drive or attach it to email
-/// as a spreadsheet.
+/// Shares [content] as an actual file named [fileName] (of [mimeType]) via the
+/// system share sheet, so the user can save it to Files/Drive or attach it to
+/// email.
 ///
 /// The file is built in memory with [XFile.fromData]. We MUST pass the bytes as
 /// [ShareParams.files] (not [ShareParams.text]) — sharing `text:` hands the
@@ -27,14 +27,15 @@ Rect? shareOriginFor(BuildContext context) {
 ///
 /// [origin] anchors the share popover on iPad/macOS; pass the source widget's
 /// global rect where available (ignored on phones).
-Future<ShareResult> shareCsv(
-  String csv,
+Future<ShareResult> shareTextFile(
+  String content,
   String fileName, {
+  required String mimeType,
   Rect? origin,
 }) {
   final file = XFile.fromData(
-    Uint8List.fromList(utf8.encode(csv)),
-    mimeType: 'text/csv',
+    Uint8List.fromList(utf8.encode(content)),
+    mimeType: mimeType,
     name: fileName,
   );
   return SharePlus.instance.share(
@@ -46,3 +47,11 @@ Future<ShareResult> shareCsv(
     ),
   );
 }
+
+/// Shares [csv] as a `.csv` spreadsheet file (a per-month collection sheet).
+Future<ShareResult> shareCsv(String csv, String fileName, {Rect? origin}) =>
+    shareTextFile(csv, fileName, mimeType: 'text/csv', origin: origin);
+
+/// Shares [json] as a `.json` file — used for the full lossless ledger backup.
+Future<ShareResult> shareJson(String json, String fileName, {Rect? origin}) =>
+    shareTextFile(json, fileName, mimeType: 'application/json', origin: origin);

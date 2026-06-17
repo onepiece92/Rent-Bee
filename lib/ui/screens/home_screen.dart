@@ -30,12 +30,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final ledger = context.watch<LedgerProvider>();
-
     return SafeArea(
       bottom: false,
       child: RefreshIndicator(
-        onRefresh: ledger.refresh,
+        onRefresh: () => context.read<LedgerProvider>().refresh(),
         color: Brand.orange,
         backgroundColor: Brand.navy,
         child: CustomScrollView(
@@ -43,32 +41,52 @@ class _HomeScreenState extends State<HomeScreen> {
           // works on an empty ledger.
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
-            SliverToBoxAdapter(child: _Header(ledger: ledger)),
-            SliverToBoxAdapter(child: _SummaryCard(summary: ledger.summary)),
+            // Each section selects only the slice it needs, so typing in the
+            // search box (or a mark-paid refresh) rebuilds just the list below
+            // — not the header or summary above.
             SliverToBoxAdapter(
-              child: _SearchAndFilter(ledger: ledger, controller: _searchCtrl),
-            ),
-            if (ledger.loading)
-              const SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.symmetric(vertical: 48),
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-              )
-            else if (ledger.visibleRows.isEmpty)
-              SliverToBoxAdapter(
-                child: _Empty(noUnits: ledger.totalCount == 0),
-              )
-            else
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
-                sliver: SliverList.separated(
-                  itemCount: ledger.visibleRows.length,
-                  separatorBuilder: (_, i) => const SizedBox(height: 9),
-                  itemBuilder: (context, i) =>
-                      _UnitTile(row: ledger.visibleRows[i]),
-                ),
+              child: Selector<LedgerProvider, BsMonth>(
+                selector: (_, l) => l.month,
+                builder: (_, month, _) => _Header(month: month),
               ),
+            ),
+            SliverToBoxAdapter(
+              child: Selector<LedgerProvider, MonthSummary>(
+                selector: (_, l) => l.summary,
+                builder: (_, summary, _) => _SummaryCard(summary: summary),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: _SearchAndFilter(controller: _searchCtrl),
+            ),
+            // List / empty / loading — its own Consumer so search, filter, and
+            // refresh rebuild only this region.
+            Consumer<LedgerProvider>(
+              builder: (context, ledger, _) {
+                if (ledger.loading) {
+                  return const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 48),
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+                  );
+                }
+                final rows = ledger.visibleRows; // read once (was O(N²) below)
+                if (rows.isEmpty) {
+                  return SliverToBoxAdapter(
+                    child: _Empty(noUnits: ledger.totalCount == 0),
+                  );
+                }
+                return SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
+                  sliver: SliverList.separated(
+                    itemCount: rows.length,
+                    separatorBuilder: (_, i) => const SizedBox(height: 9),
+                    itemBuilder: (context, i) => _UnitTile(row: rows[i]),
+                  ),
+                );
+              },
+            ),
             // Sponsored carousel — outside the list, shown even when empty.
             const SliverToBoxAdapter(child: SponsoredCarousel()),
             const SliverToBoxAdapter(child: SizedBox(height: 120)),
@@ -80,12 +98,15 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class _Header extends StatelessWidget {
-  final LedgerProvider ledger;
-  const _Header({required this.ledger});
+  final BsMonth month;
+  const _Header({required this.month});
 
   @override
   Widget build(BuildContext context) {
     final mode = context.watch<SettingsProvider>().calendar;
+    // Nav callbacks only — read (not watch) so the header rebuilds solely on
+    // the `month` the parent Selector feeds it.
+    final ledger = context.read<LedgerProvider>();
     // The real current BS month, for the "jump to today" chip.
     final today = bsYearMonth(DateTime.now());
     final currentMonth = BsMonth(today.year, today.month);
@@ -118,7 +139,7 @@ class _Header extends StatelessWidget {
               // Today's date — tap to jump back to the current month.
               _TodayChip(
                 mode: mode,
-                isCurrent: ledger.month == currentMonth,
+                isCurrent: month == currentMonth,
                 onTap: () => ledger.setMonth(currentMonth),
               ),
             ],
@@ -135,14 +156,14 @@ class _Header extends StatelessWidget {
                   child: Column(
                     children: [
                       Text(
-                        ledger.month.monthNameIn(mode),
+                        month.monthNameIn(mode),
                         style: display(
                           fontSize: 19,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       Text(
-                        '${ledger.month.yearIn(mode)}',
+                        '${month.yearIn(mode)}',
                         style: const TextStyle(
                           fontSize: 11,
                           color: Brand.muted,
@@ -373,12 +394,14 @@ class _StatChip extends StatelessWidget {
 }
 
 class _SearchAndFilter extends StatelessWidget {
-  final LedgerProvider ledger;
   final TextEditingController controller;
-  const _SearchAndFilter({required this.ledger, required this.controller});
+  const _SearchAndFilter({required this.controller});
 
   @override
   Widget build(BuildContext context) {
+    // Scoped to its own widget so the query/filter watch rebuilds only this
+    // bar, not the header or summary above.
+    final ledger = context.watch<LedgerProvider>();
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
       child: Column(
@@ -496,6 +519,7 @@ class _UnitTile extends StatelessWidget {
     return GlassPanel(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
       borderRadius: BorderRadius.circular(18),
+      blur: false, // list tile — avoid a live blur layer per row
       onTap: () => UnitDetailSheet.show(context, s.id),
       child: Row(
         children: [

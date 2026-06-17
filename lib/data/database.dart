@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart';
+import 'package:uuid/uuid.dart';
 
 import 'connection/connection.dart' as conn;
 
@@ -10,6 +11,16 @@ enum PayMethod { cash, bank, wallet, other }
 @DataClassName('Unit')
 class Units extends Table {
   IntColumn get id => integer().autoIncrement()();
+
+  /// Stable cross-device identity for cloud sync (a UUID). The local [id]
+  /// differs per device and [code] is user-editable, so neither can key the
+  /// Firestore document — this can. Nullable only for the brief window of the
+  /// v4 migration backfill; every row created afterwards has one. Uniqueness is
+  /// enforced by a unique index (see [beforeOpen]) rather than an inline
+  /// UNIQUE, because SQLite's `ALTER TABLE ADD COLUMN` cannot add a UNIQUE
+  /// column.
+  TextColumn get cloudId => text().nullable()();
+
   TextColumn get code => text().withLength(min: 1, max: 32).unique()();
   TextColumn get tenantName => text().withLength(min: 1, max: 120)();
   TextColumn get businessType => text().withDefault(const Constant(''))();
@@ -94,7 +105,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -111,10 +122,34 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(units, units.depositRefundedOn);
             await m.createTable(charges);
           }
+          // v4: stable cloud-sync identity. Add the column nullable (SQLite
+          // can't ADD COLUMN with UNIQUE), then backfill a UUID into every
+          // existing unit so prior local data syncs with a stable key.
+          if (from < 4) {
+            await m.addColumn(units, units.cloudId);
+            const uuid = Uuid();
+            final existing = await select(units).get();
+            for (final u in existing) {
+              await (update(units)..where((t) => t.id.equals(u.id)))
+                  .write(UnitsCompanion(cloudId: Value(uuid.v4())));
+            }
+          }
         },
         beforeOpen: (details) async {
           // Enforce FK cascade.
           await customStatement('PRAGMA foreign_keys = ON');
+          // The unique key leads with unit_id, so month/period queries that
+          // filter on (year, month) alone would full-scan. This (year, month)
+          // index serves paymentsForMonth / paymentsForRange. Idempotent.
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS idx_payments_year_month '
+              'ON payments (year, month)');
+          // Enforce cloud_id uniqueness here (not inline UNIQUE) so it applies
+          // to both fresh and migrated DBs; a unique index permits the multiple
+          // transient NULLs that exist mid-backfill. Idempotent.
+          await customStatement(
+              'CREATE UNIQUE INDEX IF NOT EXISTS idx_units_cloud_id '
+              'ON units (cloud_id)');
         },
       );
 }

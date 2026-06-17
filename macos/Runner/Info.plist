@@ -30,5 +30,10 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- Disable Flutter's experimental merged platform/UI thread. On by default
+	     in recent Flutter, it breaks keyboard/text-input on macOS (Tahoe/26).
+	     Reverts to the stable threading model. -->
+	<key>FLTEnableMergedPlatformUIThread</key>
+	<false/>
 </dict>
 </plist>

@@ -21,6 +21,17 @@ class $UnitsTable extends Units with TableInfo<$UnitsTable, Unit> {
       'PRIMARY KEY AUTOINCREMENT',
     ),
   );
+  static const VerificationMeta _cloudIdMeta = const VerificationMeta(
+    'cloudId',
+  );
+  @override
+  late final GeneratedColumn<String> cloudId = GeneratedColumn<String>(
+    'cloud_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _codeMeta = const VerificationMeta('code');
   @override
   late final GeneratedColumn<String> code = GeneratedColumn<String>(
@@ -182,6 +193,7 @@ class $UnitsTable extends Units with TableInfo<$UnitsTable, Unit> {
   @override
   List<GeneratedColumn> get $columns => [
     id,
+    cloudId,
     code,
     tenantName,
     businessType,
@@ -210,6 +222,12 @@ class $UnitsTable extends Units with TableInfo<$UnitsTable, Unit> {
     final data = instance.toColumns(true);
     if (data.containsKey('id')) {
       context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('cloud_id')) {
+      context.handle(
+        _cloudIdMeta,
+        cloudId.isAcceptableOrUnknown(data['cloud_id']!, _cloudIdMeta),
+      );
     }
     if (data.containsKey('code')) {
       context.handle(
@@ -326,6 +344,10 @@ class $UnitsTable extends Units with TableInfo<$UnitsTable, Unit> {
         DriftSqlType.int,
         data['${effectivePrefix}id'],
       )!,
+      cloudId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}cloud_id'],
+      ),
       code: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}code'],
@@ -389,6 +411,15 @@ class $UnitsTable extends Units with TableInfo<$UnitsTable, Unit> {
 
 class Unit extends DataClass implements Insertable<Unit> {
   final int id;
+
+  /// Stable cross-device identity for cloud sync (a UUID). The local [id]
+  /// differs per device and [code] is user-editable, so neither can key the
+  /// Firestore document — this can. Nullable only for the brief window of the
+  /// v4 migration backfill; every row created afterwards has one. Uniqueness is
+  /// enforced by a unique index (see [beforeOpen]) rather than an inline
+  /// UNIQUE, because SQLite's `ALTER TABLE ADD COLUMN` cannot add a UNIQUE
+  /// column.
+  final String? cloudId;
   final String code;
   final String tenantName;
   final String businessType;
@@ -399,12 +430,12 @@ class Unit extends DataClass implements Insertable<Unit> {
   final DateTime createdAt;
 
   /// When the tenant joined / the current rent started. Anchors the annual
-  /// rent increase: a unit is only raised once a full year has passed since
+  /// lease escalation: a unit is only raised once a full year has passed since
   /// this date (so a newly-joined tenant isn't raised immediately). Nullable
   /// for legacy units with no recorded start.
   final DateTime? startedOn;
 
-  /// Last time the annual increase was applied to this unit. Makes the raise
+  /// Last time the annual lease escalation was applied to this unit. Makes the raise
   /// idempotent within a year — eligibility is measured from
   /// `lastRaisedOn ?? startedOn`. Null until the first raise.
   final DateTime? lastRaisedOn;
@@ -419,6 +450,7 @@ class Unit extends DataClass implements Insertable<Unit> {
   final DateTime? depositRefundedOn;
   const Unit({
     required this.id,
+    this.cloudId,
     required this.code,
     required this.tenantName,
     required this.businessType,
@@ -437,6 +469,9 @@ class Unit extends DataClass implements Insertable<Unit> {
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
     map['id'] = Variable<int>(id);
+    if (!nullToAbsent || cloudId != null) {
+      map['cloud_id'] = Variable<String>(cloudId);
+    }
     map['code'] = Variable<String>(code);
     map['tenant_name'] = Variable<String>(tenantName);
     map['business_type'] = Variable<String>(businessType);
@@ -466,6 +501,9 @@ class Unit extends DataClass implements Insertable<Unit> {
   UnitsCompanion toCompanion(bool nullToAbsent) {
     return UnitsCompanion(
       id: Value(id),
+      cloudId: cloudId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(cloudId),
       code: Value(code),
       tenantName: Value(tenantName),
       businessType: Value(businessType),
@@ -499,6 +537,7 @@ class Unit extends DataClass implements Insertable<Unit> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return Unit(
       id: serializer.fromJson<int>(json['id']),
+      cloudId: serializer.fromJson<String?>(json['cloudId']),
       code: serializer.fromJson<String>(json['code']),
       tenantName: serializer.fromJson<String>(json['tenantName']),
       businessType: serializer.fromJson<String>(json['businessType']),
@@ -521,6 +560,7 @@ class Unit extends DataClass implements Insertable<Unit> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
       'id': serializer.toJson<int>(id),
+      'cloudId': serializer.toJson<String?>(cloudId),
       'code': serializer.toJson<String>(code),
       'tenantName': serializer.toJson<String>(tenantName),
       'businessType': serializer.toJson<String>(businessType),
@@ -539,6 +579,7 @@ class Unit extends DataClass implements Insertable<Unit> {
 
   Unit copyWith({
     int? id,
+    Value<String?> cloudId = const Value.absent(),
     String? code,
     String? tenantName,
     String? businessType,
@@ -554,6 +595,7 @@ class Unit extends DataClass implements Insertable<Unit> {
     Value<DateTime?> depositRefundedOn = const Value.absent(),
   }) => Unit(
     id: id ?? this.id,
+    cloudId: cloudId.present ? cloudId.value : this.cloudId,
     code: code ?? this.code,
     tenantName: tenantName ?? this.tenantName,
     businessType: businessType ?? this.businessType,
@@ -573,6 +615,7 @@ class Unit extends DataClass implements Insertable<Unit> {
   Unit copyWithCompanion(UnitsCompanion data) {
     return Unit(
       id: data.id.present ? data.id.value : this.id,
+      cloudId: data.cloudId.present ? data.cloudId.value : this.cloudId,
       code: data.code.present ? data.code.value : this.code,
       tenantName: data.tenantName.present
           ? data.tenantName.value
@@ -607,6 +650,7 @@ class Unit extends DataClass implements Insertable<Unit> {
   String toString() {
     return (StringBuffer('Unit(')
           ..write('id: $id, ')
+          ..write('cloudId: $cloudId, ')
           ..write('code: $code, ')
           ..write('tenantName: $tenantName, ')
           ..write('businessType: $businessType, ')
@@ -627,6 +671,7 @@ class Unit extends DataClass implements Insertable<Unit> {
   @override
   int get hashCode => Object.hash(
     id,
+    cloudId,
     code,
     tenantName,
     businessType,
@@ -646,6 +691,7 @@ class Unit extends DataClass implements Insertable<Unit> {
       identical(this, other) ||
       (other is Unit &&
           other.id == this.id &&
+          other.cloudId == this.cloudId &&
           other.code == this.code &&
           other.tenantName == this.tenantName &&
           other.businessType == this.businessType &&
@@ -663,6 +709,7 @@ class Unit extends DataClass implements Insertable<Unit> {
 
 class UnitsCompanion extends UpdateCompanion<Unit> {
   final Value<int> id;
+  final Value<String?> cloudId;
   final Value<String> code;
   final Value<String> tenantName;
   final Value<String> businessType;
@@ -678,6 +725,7 @@ class UnitsCompanion extends UpdateCompanion<Unit> {
   final Value<DateTime?> depositRefundedOn;
   const UnitsCompanion({
     this.id = const Value.absent(),
+    this.cloudId = const Value.absent(),
     this.code = const Value.absent(),
     this.tenantName = const Value.absent(),
     this.businessType = const Value.absent(),
@@ -694,6 +742,7 @@ class UnitsCompanion extends UpdateCompanion<Unit> {
   });
   UnitsCompanion.insert({
     this.id = const Value.absent(),
+    this.cloudId = const Value.absent(),
     required String code,
     required String tenantName,
     this.businessType = const Value.absent(),
@@ -712,6 +761,7 @@ class UnitsCompanion extends UpdateCompanion<Unit> {
        monthlyRent = Value(monthlyRent);
   static Insertable<Unit> custom({
     Expression<int>? id,
+    Expression<String>? cloudId,
     Expression<String>? code,
     Expression<String>? tenantName,
     Expression<String>? businessType,
@@ -728,6 +778,7 @@ class UnitsCompanion extends UpdateCompanion<Unit> {
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
+      if (cloudId != null) 'cloud_id': cloudId,
       if (code != null) 'code': code,
       if (tenantName != null) 'tenant_name': tenantName,
       if (businessType != null) 'business_type': businessType,
@@ -746,6 +797,7 @@ class UnitsCompanion extends UpdateCompanion<Unit> {
 
   UnitsCompanion copyWith({
     Value<int>? id,
+    Value<String?>? cloudId,
     Value<String>? code,
     Value<String>? tenantName,
     Value<String>? businessType,
@@ -762,6 +814,7 @@ class UnitsCompanion extends UpdateCompanion<Unit> {
   }) {
     return UnitsCompanion(
       id: id ?? this.id,
+      cloudId: cloudId ?? this.cloudId,
       code: code ?? this.code,
       tenantName: tenantName ?? this.tenantName,
       businessType: businessType ?? this.businessType,
@@ -783,6 +836,9 @@ class UnitsCompanion extends UpdateCompanion<Unit> {
     final map = <String, Expression>{};
     if (id.present) {
       map['id'] = Variable<int>(id.value);
+    }
+    if (cloudId.present) {
+      map['cloud_id'] = Variable<String>(cloudId.value);
     }
     if (code.present) {
       map['code'] = Variable<String>(code.value);
@@ -830,6 +886,7 @@ class UnitsCompanion extends UpdateCompanion<Unit> {
   String toString() {
     return (StringBuffer('UnitsCompanion(')
           ..write('id: $id, ')
+          ..write('cloudId: $cloudId, ')
           ..write('code: $code, ')
           ..write('tenantName: $tenantName, ')
           ..write('businessType: $businessType, ')
@@ -1929,6 +1986,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
 typedef $$UnitsTableCreateCompanionBuilder =
     UnitsCompanion Function({
       Value<int> id,
+      Value<String?> cloudId,
       required String code,
       required String tenantName,
       Value<String> businessType,
@@ -1946,6 +2004,7 @@ typedef $$UnitsTableCreateCompanionBuilder =
 typedef $$UnitsTableUpdateCompanionBuilder =
     UnitsCompanion Function({
       Value<int> id,
+      Value<String?> cloudId,
       Value<String> code,
       Value<String> tenantName,
       Value<String> businessType,
@@ -2014,6 +2073,11 @@ class $$UnitsTableFilterComposer extends Composer<_$AppDatabase, $UnitsTable> {
   });
   ColumnFilters<int> get id => $composableBuilder(
     column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get cloudId => $composableBuilder(
+    column: $table.cloudId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2147,6 +2211,11 @@ class $$UnitsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get cloudId => $composableBuilder(
+    column: $table.cloudId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get code => $composableBuilder(
     column: $table.code,
     builder: (column) => ColumnOrderings(column),
@@ -2224,6 +2293,9 @@ class $$UnitsTableAnnotationComposer
   });
   GeneratedColumn<int> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get cloudId =>
+      $composableBuilder(column: $table.cloudId, builder: (column) => column);
 
   GeneratedColumn<String> get code =>
       $composableBuilder(column: $table.code, builder: (column) => column);
@@ -2358,6 +2430,7 @@ class $$UnitsTableTableManager
           updateCompanionCallback:
               ({
                 Value<int> id = const Value.absent(),
+                Value<String?> cloudId = const Value.absent(),
                 Value<String> code = const Value.absent(),
                 Value<String> tenantName = const Value.absent(),
                 Value<String> businessType = const Value.absent(),
@@ -2373,6 +2446,7 @@ class $$UnitsTableTableManager
                 Value<DateTime?> depositRefundedOn = const Value.absent(),
               }) => UnitsCompanion(
                 id: id,
+                cloudId: cloudId,
                 code: code,
                 tenantName: tenantName,
                 businessType: businessType,
@@ -2390,6 +2464,7 @@ class $$UnitsTableTableManager
           createCompanionCallback:
               ({
                 Value<int> id = const Value.absent(),
+                Value<String?> cloudId = const Value.absent(),
                 required String code,
                 required String tenantName,
                 Value<String> businessType = const Value.absent(),
@@ -2405,6 +2480,7 @@ class $$UnitsTableTableManager
                 Value<DateTime?> depositRefundedOn = const Value.absent(),
               }) => UnitsCompanion.insert(
                 id: id,
+                cloudId: cloudId,
                 code: code,
                 tenantName: tenantName,
                 businessType: businessType,

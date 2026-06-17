@@ -29,29 +29,30 @@ void main() {
     return (db.select(db.units)..where((u) => u.id.equals(id))).getSingle();
   }
 
-  group('exportCsv (single month)', () {
+  group('exportCsvRange (single month)', () {
     test('header and a paid row', () async {
       final u = await seed('A-01', 'Asha', 10000);
       await repo.markPaid(u, 2082, 2,
           amount: 10000, paidOn: DateTime(2025, 5, 20));
 
-      final csv = await repo.exportCsv(2082, 2);
+      final csv = await repo.exportCsvRange(2082, 2, 2);
       final lines = csv.trim().split('\n');
 
-      expect(lines.first, 'code,tenant,rent,status,paid_on,method,amount');
-      expect(lines[1], 'A-01,Asha,10000,paid,2025-05-20,cash,10000');
+      expect(lines.first,
+          'month,year,code,tenant,rent,status,paid_on,method,amount');
+      expect(lines[1], 'Jestha,2082,A-01,Asha,10000,paid,2025-05-20,cash,10000');
     });
 
     test('pending unit exports with empty amount', () async {
       await seed('A-02', 'Bibek', 5000);
-      final csv = await repo.exportCsv(2082, 2);
+      final csv = await repo.exportCsvRange(2082, 2, 2);
       final row = csv.trim().split('\n')[1];
-      expect(row, 'A-02,Bibek,5000,pending,,,');
+      expect(row, 'Jestha,2082,A-02,Bibek,5000,pending,,,');
     });
 
     test('quotes fields containing a comma', () async {
       await seed('A-03', 'Sharma, Gita', 8000);
-      final csv = await repo.exportCsv(2082, 2);
+      final csv = await repo.exportCsvRange(2082, 2, 2);
       expect(csv, contains('A-03,"Sharma, Gita",8000,'));
     });
   });
@@ -65,11 +66,12 @@ void main() {
       final csv = await repo.exportCsvRange(2082, 1, 12);
       final lines = csv.trim().split('\n');
       expect(lines.first,
-          'month,code,tenant,rent,status,paid_on,method,amount');
+          'month,year,code,tenant,rent,status,paid_on,method,amount');
       // 12 months x 1 unit = 12 data rows
       expect(lines.length, 13);
-      expect(lines, contains('Jestha,B-01,Cad,12000,paid,2025-05-20,cash,12000'));
-      expect(lines, contains('Baishakh,B-01,Cad,12000,pending,,,'));
+      expect(lines,
+          contains('Jestha,2082,B-01,Cad,12000,paid,2025-05-20,cash,12000'));
+      expect(lines, contains('Baishakh,2082,B-01,Cad,12000,pending,,,'));
     });
   });
 
@@ -100,20 +102,21 @@ void main() {
       expect(s.collected, 10000);
     });
 
-    test('single-month export round-trips units but not payments '
-        '(no month column)', () async {
+    test('single-month range round-trips units AND payments', () async {
       final u = await seed('M-01', 'Mick', 7000);
       await repo.markPaid(u, 2082, 2, amount: 7000);
 
-      final csv = await repo.exportCsv(2082, 2); // no month column
+      // A single-month range carries the month/year columns, so the payment
+      // anchors and re-imports (unlike the removed column-less single export).
+      final csv = await repo.exportCsvRange(2082, 2, 2);
       final db2 = AppDatabase.forTesting(NativeDatabase.memory());
       final repo2 = LedgerRepository(db2);
       addTearDown(db2.close);
 
       final res = await repo2.importCsv(csv, fallbackYear: 2082);
       expect(res.unitsAdded, 1);
-      // Payment is skipped because there is no month to anchor it.
-      expect(res.payments, 0);
+      expect(res.payments, 1);
+      expect((await repo2.summary(2082, 2)).collected, 7000);
     });
 
     test('is idempotent — re-importing adds nothing new', () async {
@@ -192,6 +195,55 @@ void main() {
       const csv = 'code,month,amount,status\r\nC-01,2,3000,paid\r\n';
       final res = await repo.importCsv(csv, fallbackYear: 2082);
       expect(res.payments, 1);
+    });
+  });
+
+  group('importCsv tolerant parsing', () {
+    test('parses rent/amount with separators, currency, and decimals',
+        () async {
+      const csv = 'code,month,status,rent,amount\n'
+          'F-01,2,paid,"Rs 1,20,000","1,20,000.00"\n';
+      final res = await repo.importCsv(csv, fallbackYear: 2082);
+      expect(res.unitsAdded, 1);
+      expect(res.payments, 1);
+      expect((await repo.allUnits()).single.monthlyRent, 120000);
+      expect((await repo.allPayments()).single.amount, 120000);
+    });
+
+    test('maps method synonyms and flags an unknown method as other', () async {
+      const csv = 'code,month,status,amount,method\n'
+          'M-01,2,paid,1000,eSewa\n'
+          'M-02,3,paid,1000,Cheque\n'
+          'M-03,4,paid,1000,bitcoin\n';
+      await repo.importCsv(csv, fallbackYear: 2082);
+      final code = {for (final u in await repo.allUnits()) u.id: u.code};
+      final method = {
+        for (final p in await repo.allPayments()) code[p.unitId]: p.method,
+      };
+      expect(method['M-01'], PayMethod.wallet);
+      expect(method['M-02'], PayMethod.bank);
+      expect(method['M-03'], PayMethod.other);
+    });
+
+    test('accepts day-first and year-first paid_on dates', () async {
+      const csv = 'code,month,status,amount,paid_on\n'
+          'D-01,2,paid,1000,20/05/2025\n'
+          'D-02,3,paid,1000,2025/6/8\n';
+      await repo.importCsv(csv, fallbackYear: 2082);
+      final code = {for (final u in await repo.allUnits()) u.id: u.code};
+      final paidOn = {
+        for (final p in await repo.allPayments()) code[p.unitId]: p.paidOn,
+      };
+      expect(paidOn['D-01'], DateTime(2025, 5, 20));
+      expect(paidOn['D-02'], DateTime(2025, 6, 8));
+    });
+
+    test('an out-of-range year column falls back to the open year', () async {
+      const csv = 'code,year,month,amount,status\nY-99,20830,2,5000,paid\n';
+      await repo.importCsv(csv, fallbackYear: 2082);
+      // 20830 is outside the sane BS range → filed under the fallback year.
+      expect((await repo.summary(2082, 2)).collected, 5000);
+      expect((await repo.summary(20830, 2)).collected, 0);
     });
   });
 }

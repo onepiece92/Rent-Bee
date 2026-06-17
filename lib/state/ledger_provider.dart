@@ -86,8 +86,9 @@ class LedgerProvider extends ChangeNotifier {
       _loading = true;
       notifyListeners();
     }
-    _rows = await repo.rowsForMonth(_month.year, _month.month);
-    _summary = await repo.summary(_month.year, _month.month);
+    final view = await repo.monthView(_month.year, _month.month);
+    _rows = view.rows;
+    _summary = view.summary;
     _loading = false;
     notifyListeners();
   }
@@ -199,6 +200,19 @@ class LedgerProvider extends ChangeNotifier {
   Future<({int unitsAdded, int unitsUpdated, int payments})> importCsv(
       String content) async {
     final res = await repo.importCsv(content, fallbackYear: _month.year);
+    await refresh(showLoading: true);
+    return res;
+  }
+
+  /// A full, lossless JSON snapshot of the ledger for backup (see
+  /// [LedgerRepository.exportBackupJson]).
+  Future<String> exportBackupJson() => repo.exportBackupJson();
+
+  /// Restores a JSON backup, replacing all current data, then refreshes the
+  /// view. Returns the number of units/payments/charges written.
+  Future<({int units, int payments, int charges})> restoreBackup(
+      String content) async {
+    final res = await repo.importBackupJson(content);
     await refresh(showLoading: true);
     return res;
   }

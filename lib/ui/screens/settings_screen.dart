@@ -88,6 +88,29 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 20),
+          const _SectionLabel('Backup'),
+          GlassPanel(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                _SettingTile(
+                  icon: Icons.cloud_download_outlined,
+                  title: 'Back up to file',
+                  subtitle: 'Full snapshot — units, payments, charges, deposits',
+                  onTap: () => _backup(context),
+                ),
+                const _Divider(),
+                _SettingTile(
+                  icon: Icons.restore_rounded,
+                  title: 'Restore from backup',
+                  subtitle: 'Replace all data with a backup file',
+                  iconColor: Colors.redAccent,
+                  onTap: () => _restoreBackup(context),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
           const _SectionLabel('Data'),
           GlassPanel(
             padding: EdgeInsets.zero,
@@ -96,14 +119,14 @@ class SettingsScreen extends StatelessWidget {
                 _SettingTile(
                   icon: Icons.file_download_outlined,
                   title: 'Import CSV',
-                  subtitle: 'Merge units & payments from a file',
+                  subtitle: 'Merge units & payments from a CSV',
                   onTap: () => _importCsv(context),
                 ),
                 const _Divider(),
                 _SettingTile(
                   icon: Icons.ios_share,
                   title: 'Export CSV',
-                  subtitle: 'Share this BS year\'s ledger',
+                  subtitle: 'Rent collection sheet for this BS year',
                   onTap: () => _exportCsv(context),
                 ),
                 const _Divider(),
@@ -117,9 +140,11 @@ class SettingsScreen extends StatelessWidget {
                 _SettingTile(
                   icon: Icons.delete_sweep_outlined,
                   title: 'Erase all data',
-                  subtitle: 'Delete every unit and payment',
+                  subtitle: auth.phone == null
+                      ? 'Delete every unit and payment'
+                      : 'Delete every unit and payment, on all your devices',
                   iconColor: Colors.redAccent,
-                  onTap: () => _eraseAll(context),
+                  onTap: () => _eraseAll(context, synced: auth.phone != null),
                 ),
               ],
             ),
@@ -239,6 +264,18 @@ class SettingsScreen extends StatelessWidget {
     final overlay = Overlay.of(context, rootOverlay: true);
     final year = ledger.month.year;
 
+    final ok = await _confirm(
+      context,
+      title: 'Import CSV?',
+      message:
+          'This merges units & payments from the file. Units matched by code '
+          'have their tenant and rent updated, and recorded payments for the '
+          'same months are overwritten. Rows without a year column are filed '
+          'under the open year ($year). This can\'t be undone.',
+      confirmLabel: 'Choose file',
+    );
+    if (ok != true) return;
+
     final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['csv', 'txt'],
@@ -255,12 +292,77 @@ class SettingsScreen extends StatelessWidget {
     try {
       final content = utf8.decode(bytes, allowMalformed: true);
       final res = await ledger.importCsv(content);
+      final nothing =
+          res.unitsAdded == 0 && res.unitsUpdated == 0 && res.payments == 0;
       showToastOn(
-          overlay,
-          'Imported · ${res.unitsAdded} new, ${res.unitsUpdated} updated, '
-          '${res.payments} payments (year $year)');
+        overlay,
+        nothing
+            ? 'Nothing imported — check the file has a code column and matching headers'
+            : 'Imported · ${res.unitsAdded} new, ${res.unitsUpdated} updated, '
+                '${res.payments} payments (year $year)',
+        error: nothing,
+      );
     } catch (e) {
       showToastOn(overlay, 'Import failed: $e', error: true);
+    }
+  }
+
+  /// Exports a full, lossless JSON backup (everything) and opens the system
+  /// share sheet so the owner can save it to Files/Drive. Restore with
+  /// [_restoreBackup].
+  Future<void> _backup(BuildContext context) async {
+    final ledger = context.read<LedgerProvider>();
+    final overlay = Overlay.of(context, rootOverlay: true);
+    final origin = shareOriginFor(context);
+    final stamp = DateTime.now().toIso8601String().split('T').first;
+    try {
+      final json = await ledger.exportBackupJson();
+      await shareJson(json, 'rent-bee-backup-$stamp.json', origin: origin);
+    } catch (e) {
+      showToastOn(overlay, 'Backup failed: $e', error: true);
+    }
+  }
+
+  /// Picks a JSON backup file and REPLACES all current data with it (after a
+  /// destructive confirm). The inverse of [_backup].
+  Future<void> _restoreBackup(BuildContext context) async {
+    final ledger = context.read<LedgerProvider>();
+    final overlay = Overlay.of(context, rootOverlay: true);
+
+    final ok = await _confirm(
+      context,
+      title: 'Restore from backup?',
+      message:
+          'This replaces ALL current units, payments, and charges with the '
+          'contents of the backup file. Your current data will be overwritten '
+          'and can\'t be recovered. Continue?',
+      confirmLabel: 'Choose backup',
+      destructive: true,
+    );
+    if (ok != true) return;
+
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['json', 'txt'],
+      withData: true,
+    );
+    if (picked == null || picked.files.isEmpty) return; // cancelled
+
+    final bytes = picked.files.first.bytes;
+    if (bytes == null) {
+      showToastOn(overlay, 'Could not read file', error: true);
+      return;
+    }
+
+    try {
+      final content = utf8.decode(bytes, allowMalformed: true);
+      final res = await ledger.restoreBackup(content);
+      showToastOn(
+          overlay,
+          'Restored · ${res.units} units, ${res.payments} payments, '
+          '${res.charges} charges');
+    } catch (e) {
+      showToastOn(overlay, 'Restore failed: $e', error: true);
     }
   }
 
@@ -297,15 +399,18 @@ class SettingsScreen extends StatelessWidget {
     showToastOn(overlay, '3 years of demo data generated');
   }
 
-  Future<void> _eraseAll(BuildContext context) async {
+  Future<void> _eraseAll(BuildContext context, {required bool synced}) async {
     final ledger = context.read<LedgerProvider>();
     final overlay = Overlay.of(context, rootOverlay: true);
     final ok = await _confirm(
       context,
       title: 'Erase all data?',
-      message:
-          'This permanently deletes every unit and all payment history. '
-          'This cannot be undone.',
+      message: synced
+          ? 'This permanently deletes every unit and all payment history from '
+              'this device and every other device signed in to your account. '
+              'This cannot be undone.'
+          : 'This permanently deletes every unit and all payment history. '
+              'This cannot be undone.',
       confirmLabel: 'Erase',
       destructive: true,
     );

@@ -1,4 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+
+import '../firebase_options.dart';
 
 /// Thin wrapper around Firebase phone authentication.
 ///
@@ -6,8 +9,20 @@ import 'package:firebase_auth/firebase_auth.dart';
 /// PIN-based and offline. Firebase is only ever exercised during the one-time
 /// onboarding verification — see [AuthProvider.recordPhoneVerification].
 class PhoneAuthService {
-  final FirebaseAuth _auth;
-  PhoneAuthService([FirebaseAuth? auth]) : _auth = auth ?? FirebaseAuth.instance;
+  final FirebaseAuth? _override;
+  PhoneAuthService([FirebaseAuth? auth]) : _override = auth;
+
+  // Resolved lazily so merely constructing the service (a screen-state field)
+  // never touches Firebase before [ensureInitialized] has run.
+  FirebaseAuth get _auth => _override ?? FirebaseAuth.instance;
+
+  /// Initializes Firebase on first use, idempotently. Kept **off the cold-start
+  /// path**: a returning owner who unlocks with the local PIN never reaches
+  /// onboarding, so Firebase is only loaded when a verification actually starts.
+  static Future<void>? _init;
+  static Future<void> ensureInitialized() => _init ??= Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
 
   /// Starts verification for [phoneE164] (must be E.164, e.g. `+9779801234501`).
   ///

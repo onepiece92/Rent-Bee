@@ -1,4 +1,3 @@
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,8 +6,8 @@ import 'app/router.dart';
 import 'app/theme.dart';
 import 'data/database.dart';
 import 'data/ledger_repository.dart';
+import 'data/sync_bootstrap.dart';
 import 'domain/bs_calendar.dart';
-import 'firebase_options.dart';
 import 'state/auth_provider.dart';
 import 'state/ledger_provider.dart';
 import 'state/settings_provider.dart';
@@ -19,20 +18,21 @@ const _initialMonth = BsMonth(2082, 2);
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+    // Firebase is NOT initialized here — it's loaded lazily only when phone
+    // onboarding actually runs (see PhoneAuthService.ensureInitialized), so a
+    // returning owner who unlocks with the local PIN keeps a fast cold start.
     final prefs = await SharedPreferences.getInstance();
     final auth = await AuthProvider.load(prefs);
     final settings = SettingsProvider(prefs);
     final db = await openAppDatabase();
     final repo = LedgerRepository(db);
 
-    runApp(UnitLedgerApp(auth: auth, settings: settings, repo: repo));
+    runApp(UnitLedgerApp(
+        auth: auth, settings: settings, repo: repo, prefs: prefs));
   } catch (e, st) {
-    // A failure during async startup (secure storage, DB key, SQLCipher) would
-    // otherwise leave the engine up with no UI — a blank black screen. Surface
-    // it instead so it is diagnosable on-device.
+    // A failure during async startup (prefs or DB open) would otherwise leave
+    // the engine up with no UI — a blank black screen. Surface it instead so
+    // it is diagnosable on-device.
     runApp(_StartupErrorApp(error: e, stack: st));
   }
 }
@@ -80,12 +80,14 @@ class UnitLedgerApp extends StatefulWidget {
   final AuthProvider auth;
   final SettingsProvider settings;
   final LedgerRepository repo;
+  final SharedPreferences prefs;
 
   const UnitLedgerApp({
     super.key,
     required this.auth,
     required this.settings,
     required this.repo,
+    required this.prefs,
   });
 
   @override
@@ -99,6 +101,45 @@ class _UnitLedgerAppState extends State<UnitLedgerApp> {
       LedgerProvider(widget.repo, initialMonth: _initialMonth)
         ..init(annualRaisePercent: widget.settings.annualRaisePercent);
   late final _router = buildRouter(_auth);
+
+  bool _syncStarting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Bring cloud sync online once the owner unlocks (and tear it down on
+    // sign-out). Driven off the auth state so it never blocks cold start.
+    _auth.addListener(_syncLifecycle);
+    _syncLifecycle();
+  }
+
+  @override
+  void dispose() {
+    _auth.removeListener(_syncLifecycle);
+    super.dispose();
+  }
+
+  Future<void> _syncLifecycle() async {
+    final repo = widget.repo;
+    // Start: unlocked, real owner (not guest), not already running/starting.
+    if (_auth.unlocked &&
+        !_auth.isGuest &&
+        repo.sync == null &&
+        !_syncStarting) {
+      _syncStarting = true;
+      await startSync(
+        repo: repo,
+        prefs: widget.prefs,
+        auth: _auth,
+        onApply: () => _ledger.refresh(),
+      );
+      _syncStarting = false;
+    }
+    // Stop: signed out (identity cleared) while a session was live.
+    if (!_auth.phoneVerified && repo.sync != null) {
+      await stopSync(repo);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

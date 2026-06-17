@@ -62,6 +62,7 @@ class UnitsScreen extends StatelessWidget {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
                     borderRadius: BorderRadius.circular(18),
+                    blur: false, // list tile — avoid a live blur layer per row
                     onTap: () => UnitDetailSheet.show(context, s.id),
                     child: Row(
                       children: [

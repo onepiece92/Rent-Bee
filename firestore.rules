@@ -1,0 +1,11 @@
+rules_version = '2';
+
+// Rent Bee — single-owner ledger sync. Each signed-in phone user (uid) owns
+// the entire subtree under users/{uid}; nobody else can read or write it.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}
