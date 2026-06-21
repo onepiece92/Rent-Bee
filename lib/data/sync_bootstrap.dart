@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../state/auth_provider.dart';
+import '../state/sync_status.dart';
 import 'firestore_sync_service.dart';
 import 'ledger_repository.dart';
 import 'phone_auth_service.dart';
@@ -19,8 +20,15 @@ Future<FirestoreSyncService?> startSync({
   required SharedPreferences prefs,
   required AuthProvider auth,
   required VoidCallback onApply,
+  SyncStatusController? status,
+  void Function(String? calendarMode, num? rate)? onRemoteSettings,
+  String? localCalendarMode,
+  double? localRate,
 }) async {
-  if (auth.isGuest || !auth.phoneVerified) return null;
+  if (auth.isGuest || !auth.phoneVerified) {
+    status?.setOff();
+    return null;
+  }
 
   await PhoneAuthService.ensureInitialized();
   final fbAuth = FirebaseAuth.instance;
@@ -35,22 +43,41 @@ Future<FirestoreSyncService?> startSync({
   final uid = user?.uid;
   if (uid == null) {
     debugPrint('Sync: no Firebase session restored; running local-only.');
+    status?.setOff();
     return null;
   }
 
-  final service = FirestoreSyncService(uid: uid, repo: repo, prefs: prefs);
+  final service =
+      FirestoreSyncService(uid: uid, repo: repo, prefs: prefs, status: status);
+  service.onRemoteSettings = onRemoteSettings;
   repo.sync = service;
   await service.reconcile();
   service.attachListeners(onApply);
+
+  // Owner settings (calendar mode + escalation rate): cloud wins if it has any
+  // value, otherwise seed it from this device so the first login establishes
+  // the preferences.
+  final remote = await service.fetchSettings();
+  final hasRemote = remote != null &&
+      (remote['calendarMode'] != null || remote['annualRaisePercent'] != null);
+  if (hasRemote) {
+    onRemoteSettings?.call(
+      remote['calendarMode'] as String?,
+      remote['annualRaisePercent'] as num?,
+    );
+  } else if (localCalendarMode != null && localRate != null) {
+    service.pushSettings(localCalendarMode, localRate);
+  }
   return service;
 }
 
 /// Tears sync down on sign-out: detach listeners, stop pushing, and end the
 /// Firebase session so a different owner can sign in cleanly.
-Future<void> stopSync(LedgerRepository repo) async {
+Future<void> stopSync(LedgerRepository repo, {SyncStatusController? status}) async {
   final service = repo.sync;
   repo.sync = null;
   await service?.detach();
+  status?.setOff();
   try {
     await FirebaseAuth.instance.signOut();
   } catch (e) {

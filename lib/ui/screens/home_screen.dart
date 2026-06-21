@@ -12,6 +12,7 @@ import '../sheets/unit_detail_sheet.dart';
 import '../util/sms_reminder.dart';
 import '../widgets/glass.dart';
 import '../widgets/sponsored_carousel.dart';
+import '../widgets/sync_badge.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -123,6 +124,9 @@ class _Header extends StatelessWidget {
                   'assets/icon/rent_bee.png',
                   width: 28,
                   height: 28,
+                  // Source is 512² — decode to ~2x the display size, not full.
+                  cacheWidth: 56,
+                  cacheHeight: 56,
                   fit: BoxFit.cover,
                 ),
               ),
@@ -136,6 +140,9 @@ class _Header extends StatelessWidget {
                 ),
               ),
               const Spacer(),
+              // Cloud-sync state (hidden when not signed in / local-only).
+              const SyncBadge(),
+              const SizedBox(width: 10),
               // Today's date — tap to jump back to the current month.
               _TodayChip(
                 mode: mode,

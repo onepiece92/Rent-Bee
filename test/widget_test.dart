@@ -408,6 +408,76 @@ void main() {
     });
   });
 
+  group('Deposit liability', () {
+    late AppDatabase db;
+    late LedgerRepository repo;
+
+    setUp(() {
+      db = AppDatabase.forTesting(NativeDatabase.memory());
+      repo = LedgerRepository(db);
+    });
+
+    tearDown(() => db.close());
+
+    Future<void> addUnit(String code,
+        {required int deposit,
+        bool active = true,
+        bool refunded = false}) async {
+      await repo.createUnit(UnitsCompanion.insert(
+        code: code,
+        tenantName: code,
+        monthlyRent: 10000,
+        isActive: Value(active),
+        depositAmount: Value(deposit),
+        depositRefunded: Value(refunded),
+      ));
+    }
+
+    test('empty ledger has zero liability', () async {
+      final l = await repo.depositLiability();
+      expect(l.total, 0);
+      expect(l.hasOverdue, isFalse);
+    });
+
+    test('active deposits are held; total is the sum', () async {
+      await addUnit('A-01', deposit: 20000);
+      await addUnit('A-02', deposit: 30000);
+
+      final l = await repo.depositLiability();
+      expect(l.held, 50000);
+      expect(l.heldCount, 2);
+      expect(l.dueBack, 0);
+      expect(l.total, 50000);
+      expect(l.hasOverdue, isFalse);
+    });
+
+    test('vacated-but-not-refunded deposit is due back (overdue)', () async {
+      await addUnit('A-01', deposit: 20000); // active, held
+      await addUnit('Z-09', deposit: 15000, active: false); // moved out, owed
+
+      final l = await repo.depositLiability();
+      expect(l.held, 20000);
+      expect(l.dueBack, 15000);
+      expect(l.dueBackCount, 1);
+      expect(l.total, 35000); // both still owed back
+      expect(l.hasOverdue, isTrue);
+    });
+
+    test('refunded deposits and zero-deposit units are excluded', () async {
+      await addUnit('A-01', deposit: 20000); // counts
+      await addUnit('B-02', deposit: 25000, refunded: true); // settled
+      await addUnit('C-03',
+          deposit: 18000, active: false, refunded: true); // settled
+      await addUnit('D-04', deposit: 0); // no deposit
+
+      final l = await repo.depositLiability();
+      expect(l.held, 20000);
+      expect(l.heldCount, 1);
+      expect(l.dueBack, 0);
+      expect(l.total, 20000);
+    });
+  });
+
   group('Cascade & reset', () {
     late AppDatabase db;
     late LedgerRepository repo;

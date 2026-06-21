@@ -13,6 +13,7 @@ import '../../state/ledger_provider.dart';
 import '../../state/settings_provider.dart';
 import '../util/csv_share.dart';
 import '../widgets/glass.dart';
+import '../widgets/sync_badge.dart';
 import '../widgets/glass_dialog.dart';
 import '../widgets/toast.dart';
 
@@ -93,6 +94,20 @@ class SettingsScreen extends StatelessWidget {
             padding: EdgeInsets.zero,
             child: Column(
               children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 14, 16, 14),
+                  child: SyncStatusLine(),
+                ),
+                const _Divider(),
+                if (ledger.cloudSyncActive) ...[
+                  _SettingTile(
+                    icon: Icons.cloud_upload_outlined,
+                    title: 'Back up to cloud now',
+                    subtitle: 'Force a full re-sync of everything',
+                    onTap: () => _backupToCloud(context),
+                  ),
+                  const _Divider(),
+                ],
                 _SettingTile(
                   icon: Icons.cloud_download_outlined,
                   title: 'Back up to file',
@@ -163,6 +178,9 @@ class SettingsScreen extends StatelessWidget {
                         'assets/icon/rent_bee.png',
                         width: 36,
                         height: 36,
+                        // Source is 512² — decode to ~2x the display size.
+                        cacheWidth: 72,
+                        cacheHeight: 72,
                         fit: BoxFit.cover,
                       ),
                     ),
@@ -320,6 +338,18 @@ class SettingsScreen extends StatelessWidget {
       await shareJson(json, 'rent-bee-backup-$stamp.json', origin: origin);
     } catch (e) {
       showToastOn(overlay, 'Backup failed: $e', error: true);
+    }
+  }
+
+  /// Forces a full re-push of the local ledger to the cloud mirror.
+  Future<void> _backupToCloud(BuildContext context) async {
+    final ledger = context.read<LedgerProvider>();
+    final overlay = Overlay.of(context, rootOverlay: true);
+    try {
+      await ledger.resyncToCloud();
+      showToastOn(overlay, 'Backing up to cloud…');
+    } catch (e) {
+      showToastOn(overlay, 'Cloud backup failed: $e', error: true);
     }
   }
 

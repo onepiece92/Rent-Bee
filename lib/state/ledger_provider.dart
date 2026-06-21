@@ -217,6 +217,12 @@ class LedgerProvider extends ChangeNotifier {
     return res;
   }
 
+  /// Whether cloud sync is live for this session.
+  bool get cloudSyncActive => repo.cloudSyncActive;
+
+  /// Forces a full re-push of everything to the cloud (manual backup).
+  Future<void> resyncToCloud() => repo.resyncAllToCloud();
+
   /// Applies any now-due automatic anniversary lease escalations at [percent]%
   /// (used when the owner changes the rate so the effect is immediate; startup
   /// applies them via [init]). Returns the number of units raised.

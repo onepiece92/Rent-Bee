@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -22,24 +24,38 @@ class ReportsScreen extends StatefulWidget {
 
 class _ReportsScreenState extends State<ReportsScreen> {
   late final LedgerProvider _ledger;
+  late final SettingsProvider _settings;
   ReportScope _scope = ReportScope.month;
   late BsMonth _anchor;
   Future<PeriodSummary>? _future;
+  Future<DepositLiability>? _liability;
+  Timer? _debounce;
 
   @override
   void initState() {
     super.initState();
     _ledger = context.read<LedgerProvider>();
+    _settings = context.read<SettingsProvider>();
     _anchor = _ledger.month;
-    // Refetch whenever ledger data changes (e.g. a payment marked elsewhere).
-    _ledger.addListener(_reload);
+    // Refetch whenever ledger data changes (e.g. a payment marked elsewhere),
+    // debounced so a burst of mark-paid/sync notifies re-runs the multi-month
+    // queries once instead of per-change.
+    _ledger.addListener(_onLedgerChanged);
     _reload();
   }
 
   @override
   void dispose() {
-    _ledger.removeListener(_reload);
+    _ledger.removeListener(_onLedgerChanged);
+    _debounce?.cancel();
     super.dispose();
+  }
+
+  void _onLedgerChanged() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), () {
+      if (mounted) _reload();
+    });
   }
 
   // ---- period math -------------------------------------------------------
@@ -80,7 +96,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   void _reload() {
     final (start, end) = _range;
-    _future = _ledger.repo.periodSummary(_anchor.year, start, end);
+    _future = _ledger.repo.periodSummary(_anchor.year, start, end,
+        percent: _settings.annualRaisePercent);
+    // Deposit liability is period-independent but reloads with the data so it
+    // tracks unit edits / move-outs made elsewhere.
+    _liability = _ledger.repo.depositLiability();
     if (mounted) setState(() {});
   }
 
@@ -189,7 +209,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 }
                 final summary = snap.data;
                 if (summary == null) return const SizedBox.shrink();
-                return _ReportBody(scope: _scope, summary: summary, mode: mode);
+                return _ReportBody(
+                    scope: _scope,
+                    summary: summary,
+                    mode: mode,
+                    liability: _liability);
               },
             ),
           ),
@@ -277,8 +301,12 @@ class _ReportBody extends StatelessWidget {
   final ReportScope scope;
   final PeriodSummary summary;
   final CalendarMode mode;
+  final Future<DepositLiability>? liability;
   const _ReportBody(
-      {required this.scope, required this.summary, required this.mode});
+      {required this.scope,
+      required this.summary,
+      required this.mode,
+      this.liability});
 
   @override
   Widget build(BuildContext context) {
@@ -289,6 +317,15 @@ class _ReportBody extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 120), // clear the footer navbar
       children: [
         _SummaryGrid(summary: summary),
+        if (liability != null)
+          FutureBuilder<DepositLiability>(
+            future: liability,
+            builder: (context, snap) {
+              final l = snap.data;
+              if (l == null || l.total == 0) return const SizedBox.shrink();
+              return _DepositCard(liability: l);
+            },
+          ),
         if (isPeriod) ...[
           const _SectionTitle('Monthly breakdown'),
           Padding(
@@ -432,6 +469,103 @@ class _OutstandingRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Standing deposit liability — total refundable money the landlord holds,
+/// split into deposits on active tenancies vs. vacated units overdue a refund.
+class _DepositCard extends StatelessWidget {
+  final DepositLiability liability;
+  const _DepositCard({required this.liability});
+
+  @override
+  Widget build(BuildContext context) {
+    final l = liability;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+      child: GlassPanel(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.account_balance_wallet_outlined,
+                    size: 18, color: Brand.muted),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('Deposit liability',
+                      style: TextStyle(color: Brand.muted, fontSize: 12)),
+                ),
+                Text(
+                  Money.format(l.total),
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            _DepositLine(
+              label: 'Held · ${l.heldCount} active',
+              amount: l.held,
+              color: Brand.text,
+            ),
+            if (l.hasOverdue) ...[
+              const SizedBox(height: 6),
+              _DepositLine(
+                label: 'Due back · ${l.dueBackCount} vacated',
+                amount: l.dueBack,
+                color: Brand.orangeSoft,
+                warn: true,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DepositLine extends StatelessWidget {
+  final String label;
+  final int amount;
+  final Color color;
+  final bool warn;
+  const _DepositLine({
+    required this.label,
+    required this.amount,
+    required this.color,
+    this.warn = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        if (warn) ...[
+          const Icon(Icons.error_outline, size: 14, color: Brand.orangeSoft),
+          const SizedBox(width: 6),
+        ],
+        Expanded(
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 13,
+                  color: warn ? Brand.orangeSoft : Brand.muted)),
+        ),
+        Text(
+          Money.format(amount),
+          style: TextStyle(
+            fontSize: 14,
+            color: color,
+            fontWeight: FontWeight.w600,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
     );
   }
 }

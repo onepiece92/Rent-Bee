@@ -23,6 +23,13 @@ class SettingsProvider extends ChangeNotifier {
   CalendarMode _calendar;
   double _annualRaisePercent;
 
+  /// Mirrors a settings change (calendar mode + escalation rate) to the cloud
+  /// for the signed-in owner. Set while a sync session is live (see main's
+  /// `_syncLifecycle`), null when local-only — so a guest/PIN-only user never
+  /// pushes. [applyRemoteSettings] is the matching inbound path (it does NOT
+  /// call this, avoiding echo loops).
+  void Function()? cloudPush;
+
   SettingsProvider(this._prefs)
       : _calendar = _prefs.getString(_kCalendar) == CalendarMode.ad.name
             ? CalendarMode.ad
@@ -42,6 +49,34 @@ class SettingsProvider extends ChangeNotifier {
     _calendar = mode;
     await _prefs.setString(_kCalendar, mode.name);
     notifyListeners();
+    cloudPush?.call(); // mirror the change to other devices on this login
+  }
+
+  /// Applies owner settings arriving from the cloud (same login, another
+  /// device, or the sign-in pull). Persists + notifies but never re-pushes, so
+  /// it can't echo back. Unknown/absent fields are ignored.
+  void applyRemoteSettings({String? calendarMode, num? rate}) {
+    var changed = false;
+    if (calendarMode == CalendarMode.bs.name ||
+        calendarMode == CalendarMode.ad.name) {
+      final mode = calendarMode == CalendarMode.ad.name
+          ? CalendarMode.ad
+          : CalendarMode.bs;
+      if (mode != _calendar) {
+        _calendar = mode;
+        _prefs.setString(_kCalendar, mode.name);
+        changed = true;
+      }
+    }
+    if (rate != null) {
+      final p = rate.toDouble().clamp(0, _maxRaisePercent).toDouble();
+      if (p != _annualRaisePercent) {
+        _annualRaisePercent = p;
+        _prefs.setDouble(_kRaisePercent, p);
+        changed = true;
+      }
+    }
+    if (changed) notifyListeners();
   }
 
   Future<void> setAnnualRaisePercent(double percent) async {
@@ -50,5 +85,6 @@ class SettingsProvider extends ChangeNotifier {
     _annualRaisePercent = p;
     await _prefs.setDouble(_kRaisePercent, p);
     notifyListeners();
+    cloudPush?.call(); // mirror the change to other devices on this login
   }
 }

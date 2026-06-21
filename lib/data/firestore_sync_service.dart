@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../state/sync_status.dart';
 import 'database.dart';
 import 'ledger_repository.dart';
 
@@ -27,12 +28,23 @@ class FirestoreSyncService {
   final SharedPreferences prefs;
   final FirebaseFirestore _fs;
 
+  /// Surfaced cloud-sync state for the UI (optional — null in tests).
+  final SyncStatusController? status;
+
   FirestoreSyncService({
     required this.uid,
     required this.repo,
     required this.prefs,
+    this.status,
     FirebaseFirestore? firestore,
   }) : _fs = firestore ?? FirebaseFirestore.instance;
+
+  // Number of pushes currently in flight; while > 0 we report `syncing`.
+  int _pending = 0;
+
+  /// Applies owner settings (calendar mode + escalation rate) arriving on the
+  /// owner's settings doc.
+  void Function(String? calendarMode, num? rate)? onRemoteSettings;
 
   static const _kSyncedOnce = 'synced_once';
   static const _kOwnerUid = 'ledger_owner_uid';
@@ -129,6 +141,27 @@ class FirestoreSyncService {
   /// Delete every unit/payment/charge doc for this owner (mirrors eraseAll).
   void eraseAllCloud() => _fire(_eraseAll);
 
+  // ---- Owner settings (root user doc, alongside the ledger subcollections) --
+
+  /// Mirrors the owner's calendar mode ('bs'/'ad') and annual escalation rate so
+  /// they follow the login to other devices. The PIN stays device-local.
+  void pushSettings(String calendarMode, double rate) {
+    _fire(() => _root.set(
+          {
+            'calendarMode': calendarMode,
+            'annualRaisePercent': rate,
+            'settingsUpdatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        ));
+  }
+
+  /// One-shot read of the owner settings doc (null if never written).
+  Future<Map<String, dynamic>?> fetchSettings() async {
+    final snap = await _root.get();
+    return snap.data();
+  }
+
   List<_Op> _bulkOps(List<Unit> units, List<Payment> payments,
       List<Charge> charges, Map<int, String> cloudIdByUnitId) {
     return [
@@ -160,6 +193,19 @@ class FirestoreSyncService {
   // =========================================================================
 
   Future<void> reconcile() async {
+    status?.setSyncing();
+    try {
+      await _reconcile();
+      // Pending pushes queued by _reconcile (first-sync uploads) settle via
+      // _fire; if none were queued, mark synced now.
+      if (_pending == 0) status?.setSynced();
+    } catch (e) {
+      debugPrint('Sync: reconcile failed: $e');
+      status?.setError('$e');
+    }
+  }
+
+  Future<void> _reconcile() async {
     final owner = prefs.getString(_kOwnerUid);
     if (owner != null && owner != uid) {
       // A different owner signed in on this device. The local ledger is the
@@ -253,6 +299,18 @@ class FirestoreSyncService {
     _subs.add(_units.snapshots().listen((s) => _onUnitsSnapshot(s)));
     _subs.add(_payments.snapshots().listen((s) => _onChildSnapshot(s, isPayment: true)));
     _subs.add(_charges.snapshots().listen((s) => _onChildSnapshot(s, isPayment: false)));
+    _subs.add(_root.snapshots().listen(_onRootSnapshot));
+  }
+
+  /// Owner settings doc changed elsewhere — apply calendar mode + rate locally.
+  void _onRootSnapshot(DocumentSnapshot<Map<String, dynamic>> snap) {
+    if (snap.metadata.hasPendingWrites) return; // our own echo
+    final d = snap.data();
+    if (d == null) return;
+    onRemoteSettings?.call(
+      d['calendarMode'] as String?,
+      d['annualRaisePercent'] as num?,
+    );
   }
 
   Future<void> _onUnitsSnapshot(QuerySnapshot<Map<String, dynamic>> snap) async {
@@ -436,10 +494,19 @@ class FirestoreSyncService {
   // =========================================================================
 
   /// Runs a push best-effort: never awaited by callers, errors only logged, so
-  /// a Firestore hiccup can't break a local drift write.
+  /// a Firestore hiccup can't break a local drift write. Drives the UI sync
+  /// indicator: `syncing` while any push is in flight, then `synced` once the
+  /// last one acks, or `error` if it fails (e.g. offline).
   void _fire(Future<void> Function() op) {
-    op().catchError((Object e, StackTrace st) {
+    _pending++;
+    status?.setSyncing();
+    op().then((_) {
+      _pending = _pending > 0 ? _pending - 1 : 0;
+      if (_pending == 0) status?.setSynced();
+    }).catchError((Object e, StackTrace st) {
+      _pending = _pending > 0 ? _pending - 1 : 0;
       debugPrint('Sync push failed: $e');
+      status?.setError('$e');
     });
   }
 

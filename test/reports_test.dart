@@ -149,4 +149,77 @@ void main() {
       expect(h.every((e) => !e.isPaid), isTrue);
     });
   });
+
+  // A unit started Baishakh 2079 at 10000, raised 10%/yr for three
+  // anniversaries → 10000 → 11000 → 12100 → 13310 (current, as of 2082).
+  Future<Unit> ladderUnit() async {
+    final id = await repo.createUnit(UnitsCompanion.insert(
+      code: 'L-01',
+      tenantName: 'Lakshmi',
+      monthlyRent: 13310,
+      startedOn: Value(adForBsMonthStart(2079, 1)),
+      lastRaisedOn: Value(adForBsMonthStart(2082, 1)),
+    ));
+    return (db.select(db.units)..where((u) => u.id.equals(id))).getSingle();
+  }
+
+  group('rentInEffect (historical rent)', () {
+    test('unwinds escalation to the rent in effect each past year', () async {
+      final u = await ladderUnit();
+      expect(LedgerRepository.rentInEffect(u, 2079, 6, 10), 10000);
+      expect(LedgerRepository.rentInEffect(u, 2080, 6, 10), 11000);
+      expect(LedgerRepository.rentInEffect(u, 2081, 6, 10), 12100);
+      expect(LedgerRepository.rentInEffect(u, 2082, 6, 10), 13310); // current
+    });
+
+    test('a mid-year anniversary changes the rent within the BS year', () async {
+      // Started Jestha (month 2) 2079; raised once → 11000 as of 2080.
+      final id = await repo.createUnit(UnitsCompanion.insert(
+        code: 'M-01',
+        tenantName: 'Min',
+        monthlyRent: 11000,
+        startedOn: Value(adForBsMonthStart(2079, 2)),
+        lastRaisedOn: Value(adForBsMonthStart(2080, 2)),
+      ));
+      final u = await (db.select(db.units)..where((x) => x.id.equals(id)))
+          .getSingle();
+      expect(LedgerRepository.rentInEffect(u, 2080, 1, 10), 10000); // pre-anniv
+      expect(LedgerRepository.rentInEffect(u, 2080, 2, 10), 11000); // anniv on
+    });
+
+    test('falls back to current rent without a start date or with rate off',
+        () async {
+      final id = await repo.createUnit(UnitsCompanion.insert(
+        code: 'N-01', tenantName: 'Nita', monthlyRent: 9000)); // no startedOn
+      final u = await (db.select(db.units)..where((x) => x.id.equals(id)))
+          .getSingle();
+      expect(LedgerRepository.rentInEffect(u, 2079, 6, 10), 9000);
+      final laddered = await ladderUnit();
+      expect(LedgerRepository.rentInEffect(laddered, 2079, 6, 0), 13310);
+    });
+  });
+
+  group('periodSummary (no phantom debt after a raise)', () {
+    test('a month paid in full at the old rate is not re-charged', () async {
+      final u = await ladderUnit();
+      // Fully paid Jestha 2080 at THAT year's rent (11000), not the current.
+      await repo.markPaid(u, 2080, 2, amount: 11000);
+
+      final s = await repo.periodSummary(2080, 1, 12, percent: 10);
+
+      expect(s.expected, 12 * 11000); // not 12 × 13310 (current rent)
+      final debt = s.outstanding.single;
+      expect(debt.unit.code, 'L-01');
+      expect(debt.monthsUnpaid, 11); // the paid month is settled
+      expect(debt.amountOwed, 11 * 11000); // no 2310/mo phantom on the paid one
+    });
+
+    test('escalation off → flat current rent across the period', () async {
+      final u = await ladderUnit();
+      await repo.markPaid(u, 2080, 2, amount: 13310);
+      final s = await repo.periodSummary(2080, 1, 12, percent: 0);
+      expect(s.expected, 12 * 13310);
+      expect(s.outstanding.single.amountOwed, 11 * 13310);
+    });
+  });
 }

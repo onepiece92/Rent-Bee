@@ -349,6 +349,30 @@ class LedgerRepository {
         depositRefundedOn: Value(refunded ? (on ?? DateTime.now()) : null),
       ));
 
+  /// Total refundable deposits the landlord is still holding — the standing
+  /// liability. Splits deposits on active tenancies (`held`) from those on
+  /// vacated units not yet refunded (`dueBack`, overdue to return).
+  Future<DepositLiability> depositLiability() async {
+    final units = await allUnits();
+    var held = 0, dueBack = 0, heldCount = 0, dueBackCount = 0;
+    for (final u in units) {
+      if (u.depositRefunded || u.depositAmount <= 0) continue;
+      if (u.isActive) {
+        held += u.depositAmount;
+        heldCount++;
+      } else {
+        dueBack += u.depositAmount;
+        dueBackCount++;
+      }
+    }
+    return DepositLiability(
+      held: held,
+      dueBack: dueBack,
+      heldCount: heldCount,
+      dueBackCount: dueBackCount,
+    );
+  }
+
   // ---- Reporting ---------------------------------------------------------
 
   Future<MonthSummary> summary(int year, int month) async {
@@ -392,11 +416,45 @@ class LedgerRepository {
     );
   }
 
+  /// The rent that was in effect for [unit] during BS [year]/[month],
+  /// reconstructed by unwinding the [percent]% anniversary escalations baked
+  /// into its current rent. Months at or after the latest applied raise return
+  /// the stored rent exactly; earlier months return the lower pre-raise rent —
+  /// so a later escalation never inflates historical expected/outstanding
+  /// ("phantom debt"). Falls back to the current rent when there's no start
+  /// date or escalation is off.
+  static int rentInEffect(Unit unit, int year, int month, double percent) {
+    final started = unit.startedOn;
+    if (percent <= 0 || started == null) return unit.monthlyRent;
+    final startBs = bsYearMonth(started);
+    final anchorBs = bsYearMonth(unit.lastRaisedOn ?? started);
+    // Anniversaries already compounded into the stored rent.
+    final coveredThroughYear =
+        anchorBs.month >= startBs.month ? anchorBs.year : anchorBs.year - 1;
+    final totalRaises = coveredThroughYear - startBs.year;
+    if (totalRaises <= 0) return unit.monthlyRent;
+    // Anniversaries that had occurred by the queried month.
+    final raisesByThen =
+        ((month >= startBs.month ? year : year - 1) - startBs.year)
+            .clamp(0, totalRaises);
+    final stepsBack = totalRaises - raisesByThen;
+    if (stepsBack <= 0) return unit.monthlyRent;
+    // Unwind the rounding each step (inverse of _rentAfter's compound).
+    var r = unit.monthlyRent;
+    for (var i = 0; i < stepsBack; i++) {
+      r = (r * 100 / (100 + percent)).round();
+    }
+    return r;
+  }
+
   /// Aggregated totals for an inclusive BS month range within one year.
   /// Works for any span: a single month (start == end) behaves like
-  /// [summary], a quarter (3 months), or a full year (1–12).
+  /// [summary], a quarter (3 months), or a full year (1–12). [percent] is the
+  /// active escalation rate, used to price historical months at the rent that
+  /// applied then (see [rentInEffect]).
   Future<PeriodSummary> periodSummary(
-      int year, int startMonth, int endMonth) async {
+      int year, int startMonth, int endMonth,
+      {double percent = 0}) async {
     final units = await allUnits();
     final active = units.where((s) => s.isActive).toList();
     final activeIds = {for (final s in active) s.id};
@@ -404,23 +462,7 @@ class LedgerRepository {
         .where((p) => activeIds.contains(p.unitId))
         .toList();
 
-    final monthlyExpected =
-        active.fold<int>(0, (sum, s) => sum + s.monthlyRent);
     final span = endMonth - startMonth + 1;
-
-    // Per-month breakdown.
-    final buckets = <MonthBucket>[];
-    for (var m = startMonth; m <= endMonth; m++) {
-      final collected = payments
-          .where((p) => p.month == m)
-          .fold<int>(0, (sum, p) => sum + p.amount);
-      buckets.add(MonthBucket(
-        year: year,
-        month: m,
-        expected: monthlyExpected,
-        collected: collected,
-      ));
-    }
 
     // Amount paid per (unit, month) — partial payments included.
     final paidByUnitMonth = <int, Map<int, int>>{};
@@ -429,9 +471,29 @@ class LedgerRepository {
       byMonth[p.month] = (byMonth[p.month] ?? 0) + p.amount;
     }
 
+    // Per-month breakdown — expected uses the rent in effect THAT month for
+    // each unit, so a later escalation can't inflate a historical month.
+    final buckets = <MonthBucket>[];
+    var totalExpected = 0;
+    for (var m = startMonth; m <= endMonth; m++) {
+      final monthExpected = active.fold<int>(
+          0, (sum, s) => sum + rentInEffect(s, year, m, percent));
+      final collected = payments
+          .where((p) => p.month == m)
+          .fold<int>(0, (sum, p) => sum + p.amount);
+      buckets.add(MonthBucket(
+        year: year,
+        month: m,
+        expected: monthExpected,
+        collected: collected,
+      ));
+      totalExpected += monthExpected;
+    }
+
     // Outstanding per unit + count of fully-settled (unit, month) slots.
-    // Owed is the true shortfall (rent − paid) summed over the period, so a
-    // partially-paid month contributes its remainder rather than all-or-nothing.
+    // Owed is the true shortfall (rent-in-effect − paid) summed over the
+    // period, so a month paid in full at the old rate isn't re-charged after a
+    // raise, and a partial month contributes only its remainder.
     final outstanding = <PeriodDebt>[];
     var paidSlots = 0;
     for (final s in active) {
@@ -439,11 +501,12 @@ class LedgerRepository {
       var owed = 0;
       var monthsUnpaid = 0;
       for (var m = startMonth; m <= endMonth; m++) {
+        final due = rentInEffect(s, year, m, percent);
         final paid = byMonth[m] ?? 0;
-        if (paid >= s.monthlyRent) {
+        if (paid >= due) {
           paidSlots++;
         } else {
-          owed += s.monthlyRent - paid; // counts full or partial shortfall
+          owed += due - paid; // full or partial shortfall at the month's rate
           monthsUnpaid++;
         }
       }
@@ -461,7 +524,7 @@ class LedgerRepository {
     });
 
     return PeriodSummary(
-      expected: monthlyExpected * span,
+      expected: totalExpected,
       collected: payments.fold<int>(0, (sum, p) => sum + p.amount),
       paidSlots: paidSlots,
       totalSlots: active.length * span,
@@ -931,6 +994,27 @@ class LedgerRepository {
         service: Value((m['service'] as num?)?.toInt() ?? 0),
         createdAt: Value(_date(m['createdAt']) ?? DateTime.now()),
       );
+
+  /// True when a cloud-sync session is live (signed-in, non-guest owner).
+  bool get cloudSyncActive => sync != null;
+
+  /// Forces a full re-push of the whole local ledger to the cloud in one
+  /// sequenced erase-then-write. Used by the manual "Back up to cloud now"
+  /// action (and after a long offline stretch); a no-op when not signed in.
+  Future<void> resyncAllToCloud() async {
+    final s = sync;
+    if (s == null) return;
+    final units = await allUnits();
+    s.replaceAllCloud(
+      units: units,
+      payments: await allPayments(),
+      charges: await allCharges(),
+      cloudIdByUnitId: {
+        for (final u in units)
+          if (u.cloudId != null) u.id: u.cloudId!,
+      },
+    );
+  }
 
   // ---- Seed / demo / reset -----------------------------------------------
 

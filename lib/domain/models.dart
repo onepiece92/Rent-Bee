@@ -137,6 +137,31 @@ class PeriodSummary {
   int get percent => (progress * 100).round();
 }
 
+/// The landlord's standing deposit liability — refundable money still held.
+///
+/// `held` is deposits on **active** tenancies (normal liability); `dueBack` is
+/// deposits on **vacated** units not yet refunded (money that should already
+/// have been returned). `total` is the full amount owed back to tenants.
+class DepositLiability {
+  final int held; // active tenants' deposits still held
+  final int dueBack; // vacated, not-yet-refunded deposits
+  final int heldCount; // active units holding a deposit
+  final int dueBackCount; // vacated units still owing a refund
+
+  const DepositLiability({
+    this.held = 0,
+    this.dueBack = 0,
+    this.heldCount = 0,
+    this.dueBackCount = 0,
+  });
+
+  /// Total refundable money the landlord is on the hook for.
+  int get total => held + dueBack;
+
+  /// Whether any deposit is overdue for refund (a vacated unit not refunded).
+  bool get hasOverdue => dueBack > 0;
+}
+
 /// One entry in a unit's recent month history.
 class HistoryEntry {
   final int year;
