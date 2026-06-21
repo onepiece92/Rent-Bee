@@ -246,14 +246,19 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
             keyboardType: TextInputType.number,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           ),
-          SwitchListTile(
-            value: _active,
-            onChanged: (v) => setState(() => _active = v),
-            activeThumbColor: Brand.orange,
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: const Text('Active (counts toward expected)',
-                style: TextStyle(fontSize: 13, color: Brand.muted)),
+          // Own Material so the tile's ink/background paints on it rather than
+          // being hidden by the glass sheet's coloured DecoratedBox.
+          Material(
+            type: MaterialType.transparency,
+            child: SwitchListTile(
+              value: _active,
+              onChanged: (v) => setState(() => _active = v),
+              activeThumbColor: Brand.orange,
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('Active (counts toward expected)',
+                  style: TextStyle(fontSize: 13, color: Brand.muted)),
+            ),
           ),
           const SizedBox(height: 6),
           _SaveButton(label: _isEdit ? 'Save changes' : 'Add Unit', onTap: _save),

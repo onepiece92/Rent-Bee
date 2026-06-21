@@ -14,6 +14,10 @@ void main() {
       expect(Money.format(18000), 'Rs 18,000');
       expect(Money.format(0), 'Rs 0');
     });
+    test('grouped omits the prefix but keeps en-IN grouping', () {
+      expect(Money.grouped(180000), '1,80,000');
+      expect(Money.grouped(0), '0');
+    });
   });
 
   group('BsMonth navigation wraps year boundaries', () {
@@ -350,6 +354,19 @@ void main() {
       expect(s.progress, 0);
       expect(s.percent, 0);
       expect(s.pending, 0);
+    });
+
+    test('rowsForMonth orders pending before paid, then by code', () async {
+      // Insert out of code order; pay one of them.
+      final c = await makeUnit('C-01', 10000);
+      await makeUnit('A-01', 10000);
+      await makeUnit('B-01', 10000);
+      await repo.markPaid(c, 2082, 2); // C is now paid -> sinks to the bottom
+
+      final rows = await repo.rowsForMonth(2082, 2);
+      // Pending (A, B by code) first, then the paid one (C) last.
+      expect(rows.map((r) => r.unit.code).toList(), ['A-01', 'B-01', 'C-01']);
+      expect(rows.last.isPaid, isTrue);
     });
   });
 
