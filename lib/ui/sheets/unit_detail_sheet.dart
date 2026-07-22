@@ -83,10 +83,12 @@ class UnitDetailSheet extends StatelessWidget {
               value: (s.phone == null || s.phone!.isEmpty) ? '—' : s.phone!,
               icon: Icons.phone,
               // Tap to text the tenant; only when a number is on file.
+              // `isPaid` (settled in full) — a partial payment must still send
+              // the reminder, not the thank-you.
               onTap: (s.phone == null || s.phone!.isEmpty)
                   ? null
                   : () => sendRentReminder(context, s, ledger.month,
-                      paid: row.payment != null),
+                      paid: row.isPaid),
               trailingIcon: (s.phone == null || s.phone!.isEmpty)
                   ? null
                   : Icons.sms_outlined,
@@ -397,8 +399,10 @@ class _HistoryStripState extends State<_HistoryStrip> {
     _ledger.addListener(_reload);
   }
 
-  Future<List<HistoryEntry>> _load() =>
-      _ledger.historyFor(widget.unitId, months: 6);
+  Future<List<HistoryEntry>> _load() => _ledger.historyFor(widget.unitId,
+      months: 6,
+      // Price each month at the rent in effect then, not today's rent.
+      percent: context.read<SettingsProvider>().annualRaisePercent);
 
   void _reload() {
     if (mounted) setState(() => _future = _load());

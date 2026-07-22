@@ -169,7 +169,9 @@ class LedgerRepository {
       for (final s in units) UnitRow(unit: s, payment: byUnit[s.id]),
     ];
     rows.sort((a, b) {
-      // pending (false) before paid (true)
+      // active before vacant, so a moved-out unit never crowds the working
+      // pending list; within active: pending (false) before paid (true)
+      if (a.unit.isActive != b.unit.isActive) return a.unit.isActive ? -1 : 1;
       if (a.isPaid != b.isPaid) return a.isPaid ? 1 : -1;
       return a.unit.code.compareTo(b.unit.code);
     });
@@ -185,8 +187,17 @@ class LedgerRepository {
     final payments = await paymentsForMonth(year, month);
     return (
       rows: _rowsFrom(units, payments),
-      summary: _summaryFrom(units, payments),
+      summary: _summaryFrom(units, payments, year, month),
     );
+  }
+
+  /// True when [unit] had already started (or has no recorded start date) by
+  /// BS ([year], [month]) — months before a tenant moved in expect no rent.
+  static bool _startedBy(Unit unit, int year, int month) {
+    final started = unit.startedOn;
+    if (started == null) return true;
+    final sb = bsYearMonth(started);
+    return year > sb.year || (year == sb.year && month >= sb.month);
   }
 
   /// Mark paid: upsert a payment row. amount defaults to the unit's
@@ -378,12 +389,19 @@ class LedgerRepository {
   Future<MonthSummary> summary(int year, int month) async {
     final units = await allUnits();
     final payments = await paymentsForMonth(year, month);
-    return _summaryFrom(units, payments);
+    return _summaryFrom(units, payments, year, month);
   }
 
   /// Dashboard totals from already-loaded units + that month's payments.
-  MonthSummary _summaryFrom(List<Unit> units, List<Payment> payments) {
-    final active = units.where((s) => s.isActive).toList();
+  /// `expected` counts active units that had **started** by ([year], [month]) —
+  /// a tenant who moved in later owes nothing for earlier months. `collected`
+  /// sums every payment recorded for the month, including from since-vacated
+  /// units, so money actually received is never understated.
+  MonthSummary _summaryFrom(
+      List<Unit> units, List<Payment> payments, int year, int month) {
+    final active = units
+        .where((s) => s.isActive && _startedBy(s, year, month))
+        .toList();
     final rentById = {for (final s in active) s.id: s.monthlyRent};
 
     // Amount recorded per active unit (one row per month; fold defensively).
@@ -395,7 +413,7 @@ class LedgerRepository {
     }
 
     final expected = active.fold<int>(0, (sum, s) => sum + s.monthlyRent);
-    final collected = paidById.values.fold<int>(0, (a, b) => a + b);
+    final collected = payments.fold<int>(0, (sum, p) => sum + p.amount);
     var paidCount = 0;
     var partialCount = 0;
     paidById.forEach((id, amt) {
@@ -422,8 +440,10 @@ class LedgerRepository {
   /// the stored rent exactly; earlier months return the lower pre-raise rent —
   /// so a later escalation never inflates historical expected/outstanding
   /// ("phantom debt"). Falls back to the current rent when there's no start
-  /// date or escalation is off.
+  /// date or escalation is off. Months **before** the unit's recorded start
+  /// return 0 — no rent was owed before the tenant moved in.
   static int rentInEffect(Unit unit, int year, int month, double percent) {
+    if (!_startedBy(unit, year, month)) return 0;
     final started = unit.startedOn;
     if (percent <= 0 || started == null) return unit.monthlyRent;
     final startBs = bsYearMonth(started);
@@ -457,10 +477,10 @@ class LedgerRepository {
       {double percent = 0}) async {
     final units = await allUnits();
     final active = units.where((s) => s.isActive).toList();
-    final activeIds = {for (final s in active) s.id};
-    final payments = (await paymentsForRange(year, startMonth, endMonth))
-        .where((p) => activeIds.contains(p.unitId))
-        .toList();
+    // ALL payments in range — including from since-vacated units, so the
+    // period's `collected` reflects money actually received. Expected and
+    // per-unit outstanding still cover active units only.
+    final payments = await paymentsForRange(year, startMonth, endMonth);
 
     final span = endMonth - startMonth + 1;
 
@@ -534,17 +554,16 @@ class LedgerRepository {
   }
 
   /// Recent paid/partial/unpaid per month for a unit, newest first. Each entry
-  /// carries the amount collected plus the unit's current rent as the expected,
-  /// so the UI can distinguish a full payment from a partial one. (The 6-month
-  /// window is shorter than the annual escalation cycle, so current rent is the
-  /// right yardstick for these months in practice.)
+  /// carries the amount collected plus the rent **in effect that month** (see
+  /// [rentInEffect], using the [percent] escalation rate) as the expected — so
+  /// a month fully paid at the pre-raise rate still reads as paid after an
+  /// anniversary raise lands, instead of flipping to partial.
   Future<List<HistoryEntry>> history(int unitId, BsMonth from,
-      {int months = 6}) async {
+      {int months = 6, double percent = 0}) async {
     final unit = await (db.select(db.units)
           ..where((u) => u.id.equals(unitId)))
         .getSingleOrNull();
     if (unit == null) return const [];
-    final expected = unit.monthlyRent;
 
     // One query for all of this unit's payments (bounded — a few dozen rows),
     // then fill the window in memory instead of a SELECT per month (N+1).
@@ -560,7 +579,7 @@ class LedgerRepository {
         year: cursor.year,
         month: cursor.month,
         amount: amountByMonth[(cursor.year, cursor.month)] ?? 0,
-        expected: expected,
+        expected: rentInEffect(unit, cursor.year, cursor.month, percent),
       ));
       cursor = cursor.previous();
     }

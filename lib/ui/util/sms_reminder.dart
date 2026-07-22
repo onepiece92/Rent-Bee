@@ -32,7 +32,14 @@ Future<void> sendSms(BuildContext context, String phone, {String? body}) async {
     final sep = defaultTargetPlatform == TargetPlatform.iOS ? '&' : '?';
     uri = Uri.parse('sms:$cleaned${sep}body=${Uri.encodeComponent(body)}');
   }
-  final ok = await launchUrl(uri);
+  // launchUrl can also *throw* (e.g. no SMS handler on the device) — treat
+  // that the same as a `false` return rather than crashing the tap.
+  bool ok;
+  try {
+    ok = await launchUrl(uri);
+  } on Exception {
+    ok = false;
+  }
   if (!ok && context.mounted) {
     showToast(context, 'Could not open Messages for $phone', error: true);
   }

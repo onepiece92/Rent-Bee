@@ -162,25 +162,36 @@ class _UnitLedgerAppState extends State<UnitLedgerApp>
         repo.sync == null &&
         !_syncStarting) {
       _syncStarting = true;
-      final service = await startSync(
-        repo: repo,
-        prefs: widget.prefs,
-        auth: _auth,
-        onApply: () => _ledger.refresh(),
-        status: _syncStatus,
-        onRemoteSettings: (mode, rate) =>
-            _settings.applyRemoteSettings(calendarMode: mode, rate: rate),
-        localCalendarMode: _settings.calendar.name,
-        localRate: _settings.annualRaisePercent,
-      );
-      // Mirror future settings changes (calendar + rate) to the cloud.
-      if (service != null) {
-        _settings.cloudPush = () => service.pushSettings(
-              _settings.calendar.name,
-              _settings.annualRaisePercent,
-            );
+      try {
+        final service = await startSync(
+          repo: repo,
+          prefs: widget.prefs,
+          auth: _auth,
+          onApply: () => _ledger.refresh(),
+          status: _syncStatus,
+          onRemoteSettings: (mode, rate) =>
+              _settings.applyRemoteSettings(calendarMode: mode, rate: rate),
+          localCalendarMode: _settings.calendar.name,
+          localRate: _settings.annualRaisePercent,
+        );
+        // Mirror future settings changes (calendar + rate) to the cloud —
+        // unless the owner signed out while startSync was in flight (the stop
+        // branch below already ran in a re-entrant call; don't leave a stale
+        // push closure behind).
+        if (service != null && _auth.phoneVerified) {
+          _settings.cloudPush = () => service.pushSettings(
+                _settings.calendar.name,
+                _settings.annualRaisePercent,
+              );
+        }
+      } catch (e) {
+        // A failed start must not wedge `_syncStarting` (that would disable
+        // sync for the rest of the session) or escape from a notifier callback.
+        debugPrint('Sync: start failed: $e');
+        _syncStatus.setError('$e');
+      } finally {
+        _syncStarting = false;
       }
-      _syncStarting = false;
     }
     // Stop: signed out (identity cleared) while a session was live.
     if (!_auth.phoneVerified && repo.sync != null) {

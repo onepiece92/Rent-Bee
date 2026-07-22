@@ -31,8 +31,8 @@ class UnitRow {
 
 /// Dashboard totals for a selected (year, month).
 class MonthSummary {
-  final int expected; // sum of monthly_rent over active units
-  final int collected; // sum of payments.amount for the month
+  final int expected; // sum of monthly_rent over active units started by then
+  final int collected; // sum of ALL payments.amount for the month
   final int paidCount; // active units settled in full this month
   final int partialCount; // active units with a partial payment this month
   final int activeCount; // active units total
@@ -114,7 +114,7 @@ class PeriodDebt {
 /// not back-dated, matching the existing month [MonthSummary] definition.
 class PeriodSummary {
   final int expected; // sum of per-month expected across the period
-  final int collected; // sum of payments for active units in the period
+  final int collected; // sum of ALL payments in the period (incl. vacated)
   final int paidSlots; // (unit, month) pairs paid
   final int totalSlots; // activeCount × month span
   final List<MonthBucket> months; // per-month breakdown, in order

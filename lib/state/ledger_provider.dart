@@ -232,8 +232,11 @@ class LedgerProvider extends ChangeNotifier {
     return raised;
   }
 
-  Future<List<HistoryEntry>> historyFor(int unitId, {int months = 6}) =>
-      repo.history(unitId, _month, months: months);
+  /// [percent] is the active escalation rate, used to price each history month
+  /// at the rent in effect then (see [LedgerRepository.rentInEffect]).
+  Future<List<HistoryEntry>> historyFor(int unitId,
+          {int months = 6, double percent = 0}) =>
+      repo.history(unitId, _month, months: months, percent: percent);
 
   /// Find the current row for a unit id (after a refresh) for live sheets.
   UnitRow? rowFor(int unitId) {

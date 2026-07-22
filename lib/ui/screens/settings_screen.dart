@@ -294,11 +294,17 @@ class SettingsScreen extends StatelessWidget {
     );
     if (ok != true) return;
 
-    final picked = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['csv', 'txt'],
-      withData: true,
-    );
+    final FilePickerResult? picked;
+    try {
+      picked = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['csv', 'txt'],
+        withData: true,
+      );
+    } catch (e) {
+      showToastOn(overlay, 'Could not open file picker: $e', error: true);
+      return;
+    }
     if (picked == null || picked.files.isEmpty) return; // cancelled
 
     final bytes = picked.files.first.bytes;
@@ -371,11 +377,17 @@ class SettingsScreen extends StatelessWidget {
     );
     if (ok != true) return;
 
-    final picked = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['json', 'txt'],
-      withData: true,
-    );
+    final FilePickerResult? picked;
+    try {
+      picked = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json', 'txt'],
+        withData: true,
+      );
+    } catch (e) {
+      showToastOn(overlay, 'Could not open file picker: $e', error: true);
+      return;
+    }
     if (picked == null || picked.files.isEmpty) return; // cancelled
 
     final bytes = picked.files.first.bytes;

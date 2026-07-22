@@ -16,12 +16,14 @@ void main() {
 
   tearDown(() => db.close());
 
-  Future<Unit> makeUnit(String code, int rent, {bool active = true}) async {
+  Future<Unit> makeUnit(String code, int rent,
+      {bool active = true, DateTime? startedOn}) async {
     final id = await repo.createUnit(UnitsCompanion.insert(
       code: code,
       tenantName: code,
       monthlyRent: rent,
       isActive: Value(active),
+      startedOn: startedOn == null ? const Value.absent() : Value(startedOn),
     ));
     return (db.select(db.units)..where((s) => s.id.equals(id))).getSingle();
   }
@@ -78,16 +80,18 @@ void main() {
       expect(p.outstanding.first.unit.code, 'A-02');
     });
 
-    test('inactive units are excluded from expected, collected, outstanding',
-        () async {
+    test(
+        'inactive units: excluded from expected/outstanding, but their '
+        'payments still count in collected', () async {
       await makeUnit('A-01', 10000);
       final gone = await makeUnit('Z-09', 99999, active: false);
-      // Even a recorded payment for the inactive unit is ignored.
+      // A payment recorded for a since-vacated unit is real income — it must
+      // show in `collected`, while the unit owes nothing going forward.
       await repo.markPaid(gone, 2082, 1);
 
       final p = await repo.periodSummary(2082, 1, 3);
       expect(p.expected, 30000); // only the active unit's rent × 3
-      expect(p.collected, 0);
+      expect(p.collected, 99999); // the vacated unit's payment is income
       expect(p.totalSlots, 3); // 1 active × 3
       expect(p.outstanding.every((d) => d.unit.code != 'Z-09'), isTrue);
     });
@@ -98,6 +102,36 @@ void main() {
       expect(p.months.length, 12);
       expect(p.expected, 12000);
       expect(p.totalSlots, 12);
+    });
+
+    test('months before a unit\'s start date owe nothing (no phantom debt)',
+        () async {
+      // Moved in Poush (m9) 2082 — the year report must only expect m9–m12.
+      await makeUnit('M-01', 10000,
+          startedOn: adForBsMonthStart(2082, 9));
+
+      final p = await repo.periodSummary(2082, 1, 12);
+      expect(p.expected, 40000); // 4 months × 10000, not 12
+      // m1–m8 owe nothing → count as settled slots; m9–m12 are unpaid.
+      expect(p.paidSlots, 8);
+      expect(p.outstanding.single.amountOwed, 40000);
+      expect(p.outstanding.single.monthsUnpaid, 4);
+      expect(p.months[0].expected, 0); // Baishakh, pre-start
+      expect(p.months[8].expected, 10000); // Poush, first month due
+    });
+
+    test('month summary skips units that had not started by that month',
+        () async {
+      await makeUnit('M-01', 10000, startedOn: adForBsMonthStart(2082, 9));
+      await makeUnit('N-01', 5000); // no start date → always counted
+
+      final before = await repo.summary(2082, 5); // pre-start month
+      expect(before.expected, 5000);
+      expect(before.activeCount, 1);
+
+      final after = await repo.summary(2082, 9);
+      expect(after.expected, 15000);
+      expect(after.activeCount, 2);
     });
 
     test('all settled: no outstanding, full progress', () async {

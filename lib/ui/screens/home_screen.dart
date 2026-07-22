@@ -131,15 +131,20 @@ class _Header extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 9),
-              const Text(
-                'Rent Bee',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -0.2,
+              // Expanded (not Spacer) so the title yields gracefully when the
+              // badge + chip need the room, instead of overflowing the Row.
+              const Expanded(
+                child: Text(
+                  'Rent Bee',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.2,
+                  ),
                 ),
               ),
-              const Spacer(),
               // Cloud-sync state (hidden when not signed in / local-only).
               const SyncBadge(),
               const SizedBox(width: 10),
@@ -572,25 +577,33 @@ class _UnitTile extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Quick rent reminder — only when a phone is on file.
-                  if (s.phone != null && s.phone!.isNotEmpty) ...[
-                    _CardSmsButton(
-                      onTap: () => sendRentReminder(
-                        context,
-                        s,
-                        context.read<LedgerProvider>().month,
-                        paid: paid,
+                  // A vacated unit is display-only: no rent reminder to a
+                  // former tenant, no mark-paid — just a Vacant badge. (Late
+                  // back-payments can still be recorded from the detail sheet.)
+                  if (!s.isActive)
+                    const _VacantPill()
+                  else ...[
+                    // Quick rent reminder — only when a phone is on file.
+                    if (s.phone != null && s.phone!.isNotEmpty) ...[
+                      _CardSmsButton(
+                        onTap: () => sendRentReminder(
+                          context,
+                          s,
+                          context.read<LedgerProvider>().month,
+                          paid: paid,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
+                      const SizedBox(width: 8),
+                    ],
+                    switch (row.status) {
+                      PayStatus.paid => const StatusPill(paid: true),
+                      PayStatus.partial =>
+                        _PartialPill(remaining: row.remaining),
+                      PayStatus.pending => _MarkPaidPill(
+                        onTap: () => context.read<LedgerProvider>().markPaid(s),
+                      ),
+                    },
                   ],
-                  switch (row.status) {
-                    PayStatus.paid => const StatusPill(paid: true),
-                    PayStatus.partial => _PartialPill(remaining: row.remaining),
-                    PayStatus.pending => _MarkPaidPill(
-                      onTap: () => context.read<LedgerProvider>().markPaid(s),
-                    ),
-                  },
                 ],
               ),
             ],
@@ -626,6 +639,37 @@ class _CardSmsButton extends StatelessWidget {
           child: const Icon(Icons.sms_outlined,
               size: 15, color: Brand.orangeSoft),
         ),
+      ),
+    );
+  }
+}
+
+/// Muted chip marking a vacated unit — visible for reference, no actions.
+class _VacantPill extends StatelessWidget {
+  const _VacantPill();
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: Brand.glassBorder),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.meeting_room_outlined, size: 12, color: Brand.muted),
+          SizedBox(width: 4),
+          Text(
+            'Vacant',
+            style: TextStyle(
+              color: Brand.muted,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }

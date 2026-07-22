@@ -107,6 +107,14 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
         _error = e.message ?? 'Incorrect code. Try again.';
         _busy = false;
       });
+    } catch (e) {
+      // Anything non-Firebase (e.g. a prefs write in _recordAndAdvance) must
+      // still clear _busy, or the button spins forever.
+      if (!mounted) return;
+      setState(() {
+        _error = 'Verification failed: $e';
+        _busy = false;
+      });
     }
   }
 
