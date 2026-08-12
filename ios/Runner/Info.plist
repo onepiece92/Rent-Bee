@@ -66,5 +66,27 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- Contacts: flutter_native_contact_picker needs this or the app crashes
+	     when picking a tenant's number. -->
+	<key>NSContactsUsageDescription</key>
+	<string>Rent Bee lets you pick a tenant's phone number from your contacts when adding or editing a unit.</string>
+	<!-- url_launcher: allow calling / texting / emailing tenants. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tel</string>
+		<string>sms</string>
+		<string>mailto</string>
+		<string>https</string>
+		<string>http</string>
+	</array>
+	<!-- Firebase phone auth uses a silent remote notification to verify the app. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+	<!-- Export compliance: app uses only standard HTTPS encryption, so this
+	     skips the encryption prompt on every TestFlight/App Store upload. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

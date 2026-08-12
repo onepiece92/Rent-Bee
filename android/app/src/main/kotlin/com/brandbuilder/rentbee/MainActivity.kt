@@ -1,4 +1,4 @@
-package com.rentbee.rent_bee
+package com.brandbuilder.rentbee
 
 import io.flutter.embedding.android.FlutterActivity
 

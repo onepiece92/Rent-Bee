@@ -7,5 +7,35 @@ service cloud.firestore {
     match /users/{userId}/{document=**} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
+
+    // Global OTP rate-limit counter (see OtpQuotaService). Accessed during
+    // onboarding while the user is still unauthenticated, so it is public — but
+    // increment-only: writes may raise `count` by exactly 1 within an active
+    // 24h window (capped at 10) or reset to 1 once the window has elapsed. This
+    // mirrors the client transaction so a modified client cannot exceed the cap
+    // or reset the window early.
+    match /meta/otpQuota {
+      allow read: if true;
+
+      allow create: if request.resource.data.keys().hasOnly(['count', 'windowStart'])
+        && request.resource.data.count == 1
+        && request.resource.data.windowStart == request.time;
+
+      allow update: if request.resource.data.keys().hasOnly(['count', 'windowStart'])
+        && (
+          // Within an active, non-exhausted window → increment by one.
+          (request.time < resource.data.windowStart + duration.value(24, 'h')
+            && resource.data.count < 10
+            && request.resource.data.count == resource.data.count + 1
+            && request.resource.data.windowStart == resource.data.windowStart)
+          ||
+          // Window elapsed → start a new one at the current time.
+          (request.time >= resource.data.windowStart + duration.value(24, 'h')
+            && request.resource.data.count == 1
+            && request.resource.data.windowStart == request.time)
+        );
+
+      allow delete: if false;
+    }
   }
 }

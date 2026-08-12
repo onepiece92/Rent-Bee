@@ -1,5 +1,7 @@
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 
 import '../firebase_options.dart';
 
@@ -20,9 +22,30 @@ class PhoneAuthService {
   /// path**: a returning owner who unlocks with the local PIN never reaches
   /// onboarding, so Firebase is only loaded when a verification actually starts.
   static Future<void>? _init;
-  static Future<void> ensureInitialized() => _init ??= Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform,
+  static Future<void> ensureInitialized() => _init ??= _initialize();
+
+  static Future<void> _initialize() async {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    // App Check attests that every Firebase call (OTP sends, Firestore
+    // reads/writes) comes from this genuine, unmodified app — the server-side
+    // guard that makes the phone-auth billing cap impossible to bypass with a
+    // stolen API key. Debug builds use the debug provider (register the token it
+    // prints in the Firebase console); release builds use Play Integrity
+    // (Android) and App Attest (Apple). Web is skipped — it needs a reCAPTCHA
+    // site key and isn't a store target.
+    if (!kIsWeb) {
+      await FirebaseAppCheck.instance.activate(
+        providerAndroid: kDebugMode
+            ? const AndroidDebugProvider()
+            : const AndroidPlayIntegrityProvider(),
+        providerApple: kDebugMode
+            ? const AppleDebugProvider()
+            : const AppleAppAttestWithDeviceCheckFallbackProvider(),
       );
+    }
+  }
 
   /// Starts verification for [phoneE164] (must be E.164, e.g. `+9779801234501`).
   ///

@@ -57,6 +57,7 @@ dependencies:
   firebase_auth: ^6.5.2
   cloud_firestore: ^6.5.0
   uuid: ^4.5.3
+  firebase_app_check: ^0.4.6
 
 dev_dependencies:
   flutter_test:
@@ -77,6 +78,9 @@ dev_dependencies:
 # then run: dart run flutter_launcher_icons
 flutter_launcher_icons:
   image_path: "assets/icon/rent_bee.png"
+  # iOS uses an edge-to-edge version (no padding/rounded corners — iOS masks
+  # its own), while Android keeps the card-style icon.
+  image_path_ios: "assets/icon/rent_bee_ios.png"
   android: true
   ios: true
   remove_alpha_ios: true

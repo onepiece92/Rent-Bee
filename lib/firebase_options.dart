@@ -55,25 +55,25 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyC5aXcHLfPjCDQxj_fYU1cT6gOOeVj_ZsM',
-    appId: '1:1005145227491:android:e2d2238ab440c4188c85d6',
+    appId: '1:1005145227491:android:56c571abe1374d0f8c85d6',
     messagingSenderId: '1005145227491',
     projectId: 'rent-bee-498712',
     storageBucket: 'rent-bee-498712.firebasestorage.app',
   );
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyASgq8PXF5rAJYOrETtHPOpB-5O5VtMcxM',
-    appId: '1:1005145227491:ios:d21a90ffd79ef9c78c85d6',
+    appId: '1:1005145227491:ios:2686f67bbe9afb0e8c85d6',
     messagingSenderId: '1005145227491',
     projectId: 'rent-bee-498712',
     storageBucket: 'rent-bee-498712.firebasestorage.app',
-    iosBundleId: 'com.rentbee.rentBee',
+    iosBundleId: 'com.brandbuilder.rentbee',
   );
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyASgq8PXF5rAJYOrETtHPOpB-5O5VtMcxM',
-    appId: '1:1005145227491:ios:d21a90ffd79ef9c78c85d6',
+    appId: '1:1005145227491:ios:2686f67bbe9afb0e8c85d6',
     messagingSenderId: '1005145227491',
     projectId: 'rent-bee-498712',
     storageBucket: 'rent-bee-498712.firebasestorage.app',
-    iosBundleId: 'com.rentbee.rentBee',
+    iosBundleId: 'com.brandbuilder.rentbee',
   );
 }

@@ -8,7 +8,7 @@
 PRODUCT_NAME = rent_bee
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.rentbee.rentBee
+PRODUCT_BUNDLE_IDENTIFIER = com.brandbuilder.rentbee
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.rentbee. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 com.brandbuilder. All rights reserved.

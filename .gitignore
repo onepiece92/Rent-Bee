@@ -46,3 +46,15 @@ app.*.map.json
 
 # graphify knowledge-graph output (machine-local cache + absolute paths)
 graphify-out/
+
+# Secrets — never commit signing keys or Apple auth keys
+*.p8
+AuthKey_*.p8
+*.jks
+*.keystore
+key.properties
+android/key.properties
+
+# Store marketing assets & raw screenshots (not part of the app build)
+store/
+assets/screenshots/

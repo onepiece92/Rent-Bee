@@ -7,6 +7,25 @@
   "client": [
     {
       "client_info": {
+        "mobilesdk_app_id": "1:1005145227491:android:56c571abe1374d0f8c85d6",
+        "android_client_info": {
+          "package_name": "com.brandbuilder.rentbee"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC5aXcHLfPjCDQxj_fYU1cT6gOOeVj_ZsM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:1005145227491:android:e2d2238ab440c4188c85d6",
         "android_client_info": {
           "package_name": "com.rentbee.rent_bee"

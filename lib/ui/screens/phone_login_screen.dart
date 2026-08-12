@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/theme.dart';
+import '../../data/otp_quota_service.dart';
 import '../../data/phone_auth_service.dart';
 import '../../domain/phone.dart';
 import '../../state/auth_provider.dart';
@@ -57,6 +58,16 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
     });
     try {
       await PhoneAuthService.ensureInitialized();
+      // Enforce the global daily OTP cap before spending an SMS.
+      final quota = await OtpQuotaService().tryReserve(e164);
+      if (!quota.allowed) {
+        if (!mounted) return;
+        setState(() {
+          _error = _limitReachedMessage(quota.resetAt);
+          _busy = false;
+        });
+        return;
+      }
       await _service.verifyPhoneNumber(
         phoneE164: e164,
         onCodeSent: (verificationId) {
@@ -116,6 +127,20 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
         _busy = false;
       });
     }
+  }
+
+  /// Message shown when the global daily OTP cap is exhausted, telling the user
+  /// roughly how long until verification is available again.
+  String _limitReachedMessage(DateTime? resetAt) {
+    if (resetAt == null) {
+      return 'Verification is temporarily unavailable. Please try again later.';
+    }
+    final left = resetAt.difference(DateTime.now());
+    if (left.isNegative) return 'Please try again now.';
+    final hours = left.inHours;
+    final minutes = left.inMinutes % 60;
+    final wait = hours > 0 ? '$hours h $minutes min' : '$minutes min';
+    return 'Daily verification limit reached. Please try again in $wait.';
   }
 
   Future<void> _recordAndAdvance(AuthProvider auth, User user) async {
