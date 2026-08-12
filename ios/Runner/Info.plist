@@ -70,6 +70,15 @@
 	     when picking a tenant's number. -->
 	<key>NSContactsUsageDescription</key>
 	<string>Rent Bee lets you pick a tenant's phone number from your contacts when adding or editing a unit.</string>
+	<!-- Photo library / camera: the file picker (used for CSV import) links these
+	     Apple APIs, so a purpose string is required even though Rent Bee only
+	     imports document files. These prompts appear only if you pick a photo. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Rent Bee only needs access to your photos if you choose one when importing a data file.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Rent Bee only needs the camera if you choose to capture a document when importing a data file.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Rent Bee does not use your location; this entry is required only by a bundled system component.</string>
 	<!-- url_launcher: allow calling / texting / emailing tenants. -->
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
