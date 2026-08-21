@@ -88,6 +88,26 @@
 		<string>https</string>
 		<string>http</string>
 	</array>
+	<!-- Firebase phone auth REQUIRES this custom URL scheme to be registered, or
+	     PhoneAuthProvider.verifyPhoneNumber calls fatalError() and the app hard
+	     crashes (EXC_BREAKPOINT) the moment "Send code" is tapped. The scheme is
+	     the GOOGLE_APP_ID with ":" replaced by "-", prefixed with "app-".
+	     It is the redirect target for the reCAPTCHA verification web flow, which
+	     is the fallback whenever silent-APNs app verification is unavailable.
+	     See FirebaseAuth/Sources/Swift/AuthProvider/PhoneAuthProvider.swift. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>firebase-phone-auth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>app-1-1005145227491-ios-2686f67bbe9afb0e8c85d6</string>
+			</array>
+		</dict>
+	</array>
 	<!-- Firebase phone auth uses a silent remote notification to verify the app. -->
 	<key>UIBackgroundModes</key>
 	<array>

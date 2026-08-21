@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Debug/dev builds. Firebase phone auth verifies the app with a silent
+	     remote notification; without the APNs entitlement that check can never
+	     succeed and every OTP send falls back to the reCAPTCHA web flow.
+	     Paired with UIBackgroundModes=remote-notification in Info.plist. -->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>
