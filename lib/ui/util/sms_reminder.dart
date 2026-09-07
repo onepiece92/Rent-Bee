@@ -8,15 +8,24 @@ import '../../domain/money.dart';
 import '../widgets/toast.dart';
 
 /// The SMS body for [unit]'s rent in BS [month]: a polite due-reminder when
-/// unpaid, a thank-you when already collected.
-String rentReminderText(Unit unit, BsMonth month, {required bool paid}) {
-  final amount = Money.format(unit.monthlyRent);
+/// unpaid, a thank-you when already collected. [amount] is the month's actual
+/// cash due (rent less any deduction) — required, because the headline rent is
+/// the wrong figure whenever a deduction exists. A zero amount (the deduction
+/// covered the rent, or no rent is set) never quotes "Rs 0".
+String rentReminderText(Unit unit, BsMonth month,
+    {required bool paid, required int amount}) {
+  final when = '${month.monthName} ${month.year}';
   if (paid) {
-    return 'Hi ${unit.tenantName}, thank you — we have received your '
-        '${month.monthName} ${month.year} rent of $amount.';
+    return amount > 0
+        ? 'Hi ${unit.tenantName}, thank you — we have received your $when '
+            'rent of ${Money.format(amount)}.'
+        : 'Hi ${unit.tenantName}, thank you — your $when rent is settled.';
   }
-  return 'Hi ${unit.tenantName}, gentle reminder: rent of $amount for '
-      '${month.monthName} ${month.year} is due. Thank you!';
+  return amount > 0
+      ? 'Hi ${unit.tenantName}, gentle reminder: rent of '
+          '${Money.format(amount)} for $when is due. Thank you!'
+      : 'Hi ${unit.tenantName}, gentle reminder: your $when rent is due. '
+          'Thank you!';
 }
 
 /// Opens the system Messages composer pre-addressed to [phone], with [body]
@@ -52,9 +61,10 @@ Future<void> sendRentReminder(
   Unit unit,
   BsMonth month, {
   required bool paid,
+  required int amount,
 }) async {
   final phone = unit.phone;
   if (phone == null || phone.isEmpty) return;
   await sendSms(context, phone,
-      body: rentReminderText(unit, month, paid: paid));
+      body: rentReminderText(unit, month, paid: paid, amount: amount));
 }

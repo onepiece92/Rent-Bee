@@ -441,7 +441,7 @@ class _OutstandingRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final u = debt.unit;
-    return GlassPanel(
+    return GlassPanel.tile(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
         children: [
@@ -593,7 +593,7 @@ class _SummaryGrid extends StatelessWidget {
         childAspectRatio: 2.4,
         children: [
           for (final c in cells)
-            GlassPanel(
+            GlassPanel.tile(
               padding: const EdgeInsets.all(14),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,

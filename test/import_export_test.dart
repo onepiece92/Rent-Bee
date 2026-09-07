@@ -39,15 +39,15 @@ void main() {
       final lines = csv.trim().split('\n');
 
       expect(lines.first,
-          'month,year,code,tenant,rent,status,paid_on,method,amount');
-      expect(lines[1], 'Jestha,2082,A-01,Asha,10000,paid,2025-05-20,cash,10000');
+          'month,year,code,tenant,rent,status,paid_on,method,amount,deduction');
+      expect(lines[1], 'Jestha,2082,A-01,Asha,10000,paid,2025-05-20,cash,10000,');
     });
 
     test('pending unit exports with empty amount', () async {
       await seed('A-02', 'Bibek', 5000);
       final csv = await repo.exportCsvRange(2082, 2, 2);
       final row = csv.trim().split('\n')[1];
-      expect(row, 'Jestha,2082,A-02,Bibek,5000,pending,,,');
+      expect(row, 'Jestha,2082,A-02,Bibek,5000,pending,,,,');
     });
 
     test('quotes fields containing a comma', () async {
@@ -66,12 +66,12 @@ void main() {
       final csv = await repo.exportCsvRange(2082, 1, 12);
       final lines = csv.trim().split('\n');
       expect(lines.first,
-          'month,year,code,tenant,rent,status,paid_on,method,amount');
+          'month,year,code,tenant,rent,status,paid_on,method,amount,deduction');
       // 12 months x 1 unit = 12 data rows
       expect(lines.length, 13);
       expect(lines,
-          contains('Jestha,2082,B-01,Cad,12000,paid,2025-05-20,cash,12000'));
-      expect(lines, contains('Baishakh,2082,B-01,Cad,12000,pending,,,'));
+          contains('Jestha,2082,B-01,Cad,12000,paid,2025-05-20,cash,12000,'));
+      expect(lines, contains('Baishakh,2082,B-01,Cad,12000,pending,,,,'));
     });
   });
 

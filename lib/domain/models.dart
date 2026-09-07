@@ -3,25 +3,49 @@ import '../data/database.dart';
 /// Payment state of a unit for a given month.
 enum PayStatus { pending, partial, paid }
 
+/// Rent actually due for a month once the landlord's [deduction] (goods or
+/// services taken from the tenant's shop against rent) is taken off [rent].
+/// Never negative: a deduction larger than the rent reads as 0 due, and a
+/// negative rent (possible via a restored backup or cloud doc, which don't
+/// floor it) is treated as 0 rather than tripping `clamp`'s bounds check.
+int netDue(int rent, int deduction) {
+  final due = rent - (deduction < 0 ? 0 : deduction);
+  return due < 0 ? 0 : due;
+}
+
+/// Whether a month is settled: the cash [paid] covers the [due], or nothing
+/// was due because the [deduction] alone covered the rent. A month with no
+/// rent, no cash and no deduction is *not* settled — there is nothing to show
+/// as paid. The single rule behind [UnitRow.status], [HistoryEntry.isPaid]
+/// and the month summary's paid count.
+bool settles({required int paid, required int due, required int deduction}) =>
+    paid >= due && (paid > 0 || deduction > 0);
+
 /// A unit joined with its payment (if any) for the selected month.
 class UnitRow {
   final Unit unit;
   final Payment? payment; // null = nothing recorded this month
 
-  const UnitRow({required this.unit, this.payment});
+  /// Landlord's deduction against this month's rent (0 = none). See [netDue].
+  final int deduction;
+
+  const UnitRow({required this.unit, this.payment, this.deduction = 0});
 
   /// Amount recorded for this month so far (0 if no payment row).
   int get paidAmount => payment?.amount ?? 0;
 
-  /// Remaining due against the unit's current rent, floored at 0.
-  int get remaining =>
-      (unit.monthlyRent - paidAmount).clamp(0, unit.monthlyRent);
+  /// Cash due this month: the unit's rent less the deduction, floored at 0.
+  int get rentDue => netDue(unit.monthlyRent, deduction);
 
-  /// pending (nothing/zero) · partial (some, < rent) · paid (>= rent).
+  /// Remaining due against this month's [rentDue], floored at 0.
+  int get remaining => (rentDue - paidAmount).clamp(0, rentDue);
+
+  /// pending (nothing/zero) · partial (some, < due) · paid — see [settles].
   PayStatus get status {
-    if (payment == null || paidAmount <= 0) return PayStatus.pending;
-    if (paidAmount >= unit.monthlyRent) return PayStatus.paid;
-    return PayStatus.partial;
+    if (settles(paid: paidAmount, due: rentDue, deduction: deduction)) {
+      return PayStatus.paid;
+    }
+    return paidAmount <= 0 ? PayStatus.pending : PayStatus.partial;
   }
 
   /// True only when the month is settled in full.
@@ -171,13 +195,20 @@ class HistoryEntry {
   final int amount;
 
   /// Rent expected for this month — lets the UI tell partial from full.
+  /// Already net of any [deduction] (see [netDue]).
   final int expected;
+
+  /// Landlord's deduction against this month's rent (0 = none). Only consulted
+  /// to tell "fully deducted, nothing to collect" from "not started yet" when
+  /// [expected] is 0.
+  final int deduction;
 
   const HistoryEntry({
     required this.year,
     required this.month,
     required this.amount,
     required this.expected,
+    this.deduction = 0,
   });
 
   /// Fraction of the expected rent collected, clamped to 0..1.
@@ -185,8 +216,9 @@ class HistoryEntry {
       ? (amount / expected).clamp(0, 1).toDouble()
       : (amount > 0 ? 1 : 0);
 
-  /// Paid in full — the collected amount covers the expected rent.
-  bool get isPaid => amount > 0 && amount >= expected;
+  /// Paid in full — see [settles].
+  bool get isPaid =>
+      settles(paid: amount, due: expected, deduction: deduction);
 
   /// Something was collected, but less than the expected rent.
   bool get isPartial => amount > 0 && amount < expected;
