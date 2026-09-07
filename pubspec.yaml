@@ -21,6 +21,16 @@ version: 1.0.0+3
 environment:
   sdk: ^3.11.4
 
+# The sqlite3 build hook normally downloads its prebuilt library from GitHub at
+# build time. Dart's HttpClient cannot reach github.com from this network, so we
+# read the same official release binaries from native/sqlite3/ instead. Refresh
+# them with tool/fetch_sqlite3.sh when bumping the sqlite3 dependency.
+hooks:
+  user_defines:
+    sqlite3:
+      source: test-sqlite3
+      directory: native/sqlite3/
+
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
 # consider running `flutter pub upgrade --major-versions`. Alternatively,
