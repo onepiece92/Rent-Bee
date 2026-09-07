@@ -5,7 +5,9 @@ import 'package:drift/native.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-/// Native backend: a plain on-disk SQLite file in the app documents directory.
+/// Native backend: a plain on-disk SQLite file in the app documents directory,
+/// driven from a background isolate so no query — a month refresh, opening a
+/// unit sheet, a year report — ever stalls the UI thread.
 ///
 /// Not encrypted at rest and uses no platform keychain — access is controlled
 /// by the device/app sandbox plus the PIN UI lock (see `AuthProvider`). If
@@ -15,6 +17,6 @@ Future<QueryExecutor> openLedgerExecutor() async {
   return LazyDatabase(() async {
     final dir = await getApplicationDocumentsDirectory();
     final file = File(p.join(dir.path, 'unit_ledger.sqlite'));
-    return NativeDatabase(file);
+    return NativeDatabase.createInBackground(file);
   });
 }

@@ -54,9 +54,14 @@ class Units extends Table {
   DateTimeColumn get depositRefundedOn => dateTime().nullable()();
 }
 
-/// Variable per-month utility/service charges for a unit, tracked separately
-/// from rent. One row per (unit, month); absent row = nothing recorded yet.
-/// These do NOT feed the rent collection summary — they are their own ledger.
+/// Per-(unit, month) adjustments: variable utility/service charges plus the
+/// landlord's rent deduction. One row per (unit, month); absent row = nothing
+/// recorded yet.
+///
+/// The three charges are tracked separately from rent and do NOT feed the rent
+/// collection summary — they are their own ledger. [deduction] is different:
+/// it lowers that month's rent due (see `netDue`), so it does flow into paid
+/// status, summaries and reports.
 @DataClassName('Charge')
 class Charges extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -67,6 +72,16 @@ class Charges extends Table {
   IntColumn get electricity => integer().withDefault(const Constant(0))();
   IntColumn get water => integer().withDefault(const Constant(0))();
   IntColumn get service => integer().withDefault(const Constant(0))();
+
+  /// Amount the landlord is deducting from this month's rent — typically goods
+  /// or services bought from the tenant's shop and settled against rent rather
+  /// than paid in cash. Whole NPR, 0 = none. The month's due becomes
+  /// `monthly_rent − deduction`, floored at 0.
+  IntColumn get deduction => integer().withDefault(const Constant(0))();
+
+  /// What the deduction was for (e.g. "2 sacks rice"). Null when none.
+  TextColumn get deductionNote => text().nullable()();
+
   DateTimeColumn get createdAt =>
       dateTime().withDefault(currentDateAndTime)();
 
@@ -105,7 +120,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -134,6 +149,11 @@ class AppDatabase extends _$AppDatabase {
                   .write(UnitsCompanion(cloudId: Value(uuid.v4())));
             }
           }
+          // v5: landlord's per-month rent deduction (+ note) on the charges row.
+          if (from < 5) {
+            await m.addColumn(charges, charges.deduction);
+            await m.addColumn(charges, charges.deductionNote);
+          }
         },
         beforeOpen: (details) async {
           // Enforce FK cascade.
@@ -144,6 +164,11 @@ class AppDatabase extends _$AppDatabase {
           await customStatement(
               'CREATE INDEX IF NOT EXISTS idx_payments_year_month '
               'ON payments (year, month)');
+          // Same shape for charges: chargesForMonth / chargesForRange filter
+          // on (year, month) while the unique key leads with unit_id.
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS idx_charges_year_month '
+              'ON charges (year, month)');
           // Enforce cloud_id uniqueness here (not inline UNIQUE) so it applies
           // to both fresh and migrated DBs; a unique index permits the multiple
           // transient NULLs that exist mid-backfill. Idempotent.

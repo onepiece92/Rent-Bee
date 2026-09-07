@@ -1534,6 +1534,29 @@ class $ChargesTable extends Charges with TableInfo<$ChargesTable, Charge> {
     requiredDuringInsert: false,
     defaultValue: const Constant(0),
   );
+  static const VerificationMeta _deductionMeta = const VerificationMeta(
+    'deduction',
+  );
+  @override
+  late final GeneratedColumn<int> deduction = GeneratedColumn<int>(
+    'deduction',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _deductionNoteMeta = const VerificationMeta(
+    'deductionNote',
+  );
+  @override
+  late final GeneratedColumn<String> deductionNote = GeneratedColumn<String>(
+    'deduction_note',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
   );
@@ -1555,6 +1578,8 @@ class $ChargesTable extends Charges with TableInfo<$ChargesTable, Charge> {
     electricity,
     water,
     service,
+    deduction,
+    deductionNote,
     createdAt,
   ];
   @override
@@ -1617,6 +1642,21 @@ class $ChargesTable extends Charges with TableInfo<$ChargesTable, Charge> {
         service.isAcceptableOrUnknown(data['service']!, _serviceMeta),
       );
     }
+    if (data.containsKey('deduction')) {
+      context.handle(
+        _deductionMeta,
+        deduction.isAcceptableOrUnknown(data['deduction']!, _deductionMeta),
+      );
+    }
+    if (data.containsKey('deduction_note')) {
+      context.handle(
+        _deductionNoteMeta,
+        deductionNote.isAcceptableOrUnknown(
+          data['deduction_note']!,
+          _deductionNoteMeta,
+        ),
+      );
+    }
     if (data.containsKey('created_at')) {
       context.handle(
         _createdAtMeta,
@@ -1664,6 +1704,14 @@ class $ChargesTable extends Charges with TableInfo<$ChargesTable, Charge> {
         DriftSqlType.int,
         data['${effectivePrefix}service'],
       )!,
+      deduction: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}deduction'],
+      )!,
+      deductionNote: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}deduction_note'],
+      ),
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
@@ -1685,6 +1733,15 @@ class Charge extends DataClass implements Insertable<Charge> {
   final int electricity;
   final int water;
   final int service;
+
+  /// Amount the landlord is deducting from this month's rent — typically goods
+  /// or services bought from the tenant's shop and settled against rent rather
+  /// than paid in cash. Whole NPR, 0 = none. The month's due becomes
+  /// `monthly_rent − deduction`, floored at 0.
+  final int deduction;
+
+  /// What the deduction was for (e.g. "2 sacks rice"). Null when none.
+  final String? deductionNote;
   final DateTime createdAt;
   const Charge({
     required this.id,
@@ -1694,6 +1751,8 @@ class Charge extends DataClass implements Insertable<Charge> {
     required this.electricity,
     required this.water,
     required this.service,
+    required this.deduction,
+    this.deductionNote,
     required this.createdAt,
   });
   @override
@@ -1706,6 +1765,10 @@ class Charge extends DataClass implements Insertable<Charge> {
     map['electricity'] = Variable<int>(electricity);
     map['water'] = Variable<int>(water);
     map['service'] = Variable<int>(service);
+    map['deduction'] = Variable<int>(deduction);
+    if (!nullToAbsent || deductionNote != null) {
+      map['deduction_note'] = Variable<String>(deductionNote);
+    }
     map['created_at'] = Variable<DateTime>(createdAt);
     return map;
   }
@@ -1719,6 +1782,10 @@ class Charge extends DataClass implements Insertable<Charge> {
       electricity: Value(electricity),
       water: Value(water),
       service: Value(service),
+      deduction: Value(deduction),
+      deductionNote: deductionNote == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deductionNote),
       createdAt: Value(createdAt),
     );
   }
@@ -1736,6 +1803,8 @@ class Charge extends DataClass implements Insertable<Charge> {
       electricity: serializer.fromJson<int>(json['electricity']),
       water: serializer.fromJson<int>(json['water']),
       service: serializer.fromJson<int>(json['service']),
+      deduction: serializer.fromJson<int>(json['deduction']),
+      deductionNote: serializer.fromJson<String?>(json['deductionNote']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
     );
   }
@@ -1750,6 +1819,8 @@ class Charge extends DataClass implements Insertable<Charge> {
       'electricity': serializer.toJson<int>(electricity),
       'water': serializer.toJson<int>(water),
       'service': serializer.toJson<int>(service),
+      'deduction': serializer.toJson<int>(deduction),
+      'deductionNote': serializer.toJson<String?>(deductionNote),
       'createdAt': serializer.toJson<DateTime>(createdAt),
     };
   }
@@ -1762,6 +1833,8 @@ class Charge extends DataClass implements Insertable<Charge> {
     int? electricity,
     int? water,
     int? service,
+    int? deduction,
+    Value<String?> deductionNote = const Value.absent(),
     DateTime? createdAt,
   }) => Charge(
     id: id ?? this.id,
@@ -1771,6 +1844,10 @@ class Charge extends DataClass implements Insertable<Charge> {
     electricity: electricity ?? this.electricity,
     water: water ?? this.water,
     service: service ?? this.service,
+    deduction: deduction ?? this.deduction,
+    deductionNote: deductionNote.present
+        ? deductionNote.value
+        : this.deductionNote,
     createdAt: createdAt ?? this.createdAt,
   );
   Charge copyWithCompanion(ChargesCompanion data) {
@@ -1784,6 +1861,10 @@ class Charge extends DataClass implements Insertable<Charge> {
           : this.electricity,
       water: data.water.present ? data.water.value : this.water,
       service: data.service.present ? data.service.value : this.service,
+      deduction: data.deduction.present ? data.deduction.value : this.deduction,
+      deductionNote: data.deductionNote.present
+          ? data.deductionNote.value
+          : this.deductionNote,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
     );
   }
@@ -1798,6 +1879,8 @@ class Charge extends DataClass implements Insertable<Charge> {
           ..write('electricity: $electricity, ')
           ..write('water: $water, ')
           ..write('service: $service, ')
+          ..write('deduction: $deduction, ')
+          ..write('deductionNote: $deductionNote, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
@@ -1812,6 +1895,8 @@ class Charge extends DataClass implements Insertable<Charge> {
     electricity,
     water,
     service,
+    deduction,
+    deductionNote,
     createdAt,
   );
   @override
@@ -1825,6 +1910,8 @@ class Charge extends DataClass implements Insertable<Charge> {
           other.electricity == this.electricity &&
           other.water == this.water &&
           other.service == this.service &&
+          other.deduction == this.deduction &&
+          other.deductionNote == this.deductionNote &&
           other.createdAt == this.createdAt);
 }
 
@@ -1836,6 +1923,8 @@ class ChargesCompanion extends UpdateCompanion<Charge> {
   final Value<int> electricity;
   final Value<int> water;
   final Value<int> service;
+  final Value<int> deduction;
+  final Value<String?> deductionNote;
   final Value<DateTime> createdAt;
   const ChargesCompanion({
     this.id = const Value.absent(),
@@ -1845,6 +1934,8 @@ class ChargesCompanion extends UpdateCompanion<Charge> {
     this.electricity = const Value.absent(),
     this.water = const Value.absent(),
     this.service = const Value.absent(),
+    this.deduction = const Value.absent(),
+    this.deductionNote = const Value.absent(),
     this.createdAt = const Value.absent(),
   });
   ChargesCompanion.insert({
@@ -1855,6 +1946,8 @@ class ChargesCompanion extends UpdateCompanion<Charge> {
     this.electricity = const Value.absent(),
     this.water = const Value.absent(),
     this.service = const Value.absent(),
+    this.deduction = const Value.absent(),
+    this.deductionNote = const Value.absent(),
     this.createdAt = const Value.absent(),
   }) : unitId = Value(unitId),
        year = Value(year),
@@ -1867,6 +1960,8 @@ class ChargesCompanion extends UpdateCompanion<Charge> {
     Expression<int>? electricity,
     Expression<int>? water,
     Expression<int>? service,
+    Expression<int>? deduction,
+    Expression<String>? deductionNote,
     Expression<DateTime>? createdAt,
   }) {
     return RawValuesInsertable({
@@ -1877,6 +1972,8 @@ class ChargesCompanion extends UpdateCompanion<Charge> {
       if (electricity != null) 'electricity': electricity,
       if (water != null) 'water': water,
       if (service != null) 'service': service,
+      if (deduction != null) 'deduction': deduction,
+      if (deductionNote != null) 'deduction_note': deductionNote,
       if (createdAt != null) 'created_at': createdAt,
     });
   }
@@ -1889,6 +1986,8 @@ class ChargesCompanion extends UpdateCompanion<Charge> {
     Value<int>? electricity,
     Value<int>? water,
     Value<int>? service,
+    Value<int>? deduction,
+    Value<String?>? deductionNote,
     Value<DateTime>? createdAt,
   }) {
     return ChargesCompanion(
@@ -1899,6 +1998,8 @@ class ChargesCompanion extends UpdateCompanion<Charge> {
       electricity: electricity ?? this.electricity,
       water: water ?? this.water,
       service: service ?? this.service,
+      deduction: deduction ?? this.deduction,
+      deductionNote: deductionNote ?? this.deductionNote,
       createdAt: createdAt ?? this.createdAt,
     );
   }
@@ -1927,6 +2028,12 @@ class ChargesCompanion extends UpdateCompanion<Charge> {
     if (service.present) {
       map['service'] = Variable<int>(service.value);
     }
+    if (deduction.present) {
+      map['deduction'] = Variable<int>(deduction.value);
+    }
+    if (deductionNote.present) {
+      map['deduction_note'] = Variable<String>(deductionNote.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -1943,6 +2050,8 @@ class ChargesCompanion extends UpdateCompanion<Charge> {
           ..write('electricity: $electricity, ')
           ..write('water: $water, ')
           ..write('service: $service, ')
+          ..write('deduction: $deduction, ')
+          ..write('deductionNote: $deductionNote, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
@@ -2954,6 +3063,8 @@ typedef $$ChargesTableCreateCompanionBuilder =
       Value<int> electricity,
       Value<int> water,
       Value<int> service,
+      Value<int> deduction,
+      Value<String?> deductionNote,
       Value<DateTime> createdAt,
     });
 typedef $$ChargesTableUpdateCompanionBuilder =
@@ -2965,6 +3076,8 @@ typedef $$ChargesTableUpdateCompanionBuilder =
       Value<int> electricity,
       Value<int> water,
       Value<int> service,
+      Value<int> deduction,
+      Value<String?> deductionNote,
       Value<DateTime> createdAt,
     });
 
@@ -3027,6 +3140,16 @@ class $$ChargesTableFilterComposer
 
   ColumnFilters<int> get service => $composableBuilder(
     column: $table.service,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get deduction => $composableBuilder(
+    column: $table.deduction,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get deductionNote => $composableBuilder(
+    column: $table.deductionNote,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3098,6 +3221,16 @@ class $$ChargesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get deduction => $composableBuilder(
+    column: $table.deduction,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get deductionNote => $composableBuilder(
+    column: $table.deductionNote,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
@@ -3155,6 +3288,14 @@ class $$ChargesTableAnnotationComposer
 
   GeneratedColumn<int> get service =>
       $composableBuilder(column: $table.service, builder: (column) => column);
+
+  GeneratedColumn<int> get deduction =>
+      $composableBuilder(column: $table.deduction, builder: (column) => column);
+
+  GeneratedColumn<String> get deductionNote => $composableBuilder(
+    column: $table.deductionNote,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
@@ -3218,6 +3359,8 @@ class $$ChargesTableTableManager
                 Value<int> electricity = const Value.absent(),
                 Value<int> water = const Value.absent(),
                 Value<int> service = const Value.absent(),
+                Value<int> deduction = const Value.absent(),
+                Value<String?> deductionNote = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
               }) => ChargesCompanion(
                 id: id,
@@ -3227,6 +3370,8 @@ class $$ChargesTableTableManager
                 electricity: electricity,
                 water: water,
                 service: service,
+                deduction: deduction,
+                deductionNote: deductionNote,
                 createdAt: createdAt,
               ),
           createCompanionCallback:
@@ -3238,6 +3383,8 @@ class $$ChargesTableTableManager
                 Value<int> electricity = const Value.absent(),
                 Value<int> water = const Value.absent(),
                 Value<int> service = const Value.absent(),
+                Value<int> deduction = const Value.absent(),
+                Value<String?> deductionNote = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
               }) => ChargesCompanion.insert(
                 id: id,
@@ -3247,6 +3394,8 @@ class $$ChargesTableTableManager
                 electricity: electricity,
                 water: water,
                 service: service,
+                deduction: deduction,
+                deductionNote: deductionNote,
                 createdAt: createdAt,
               ),
           withReferenceMapper: (p0) => p0

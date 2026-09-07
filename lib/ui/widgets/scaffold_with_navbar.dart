@@ -88,8 +88,11 @@ class _GlassNavBar extends StatelessWidget {
               alignment: Alignment.bottomCenter,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(24),
+                // Same radius as every other glass panel — this one sits over
+                // the scrolling list, so it's re-blurred on every scroll frame.
                 child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                  filter: ImageFilter.blur(
+                      sigmaX: Brand.glassBlur, sigmaY: Brand.glassBlur),
                   child: Container(
                     height: 64,
                     decoration: BoxDecoration(
