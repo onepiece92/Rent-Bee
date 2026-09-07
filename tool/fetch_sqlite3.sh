@@ -15,7 +15,8 @@ tag="${1:-sqlite3-3.3.2}"
 base="https://github.com/simolus3/sqlite3.dart/releases/download/$tag"
 dest="$(cd "$(dirname "$0")/.." && pwd)/native/sqlite3"
 
-# One entry per target the app builds for: iOS device + simulator, macOS, Android.
+# One entry per target the app builds for: iOS device + simulator, macOS,
+# Android, and Windows (the host `flutter test` builds for on a Windows dev box).
 files=(
   libsqlite3.arm64.ios.dylib
   libsqlite3.arm64.ios_sim.dylib
@@ -23,6 +24,7 @@ files=(
   libsqlite3.arm64.android.so
   libsqlite3.arm.android.so
   libsqlite3.x64.android.so
+  sqlite3.x64.windows.dll
 )
 
 mkdir -p "$dest"
