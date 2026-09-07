@@ -113,13 +113,19 @@ class LedgerProvider extends ChangeNotifier {
 
   // ---- mutations (each refreshes affected derived state) ------------------
 
+  /// Records this month's payment. With no [amount], settles the month at the
+  /// due the UI is showing (`rowFor(unit).rentDue` — rent less deduction), so
+  /// what the button says and what gets recorded cannot diverge.
   Future<void> markPaid(Unit unit,
       {int? amount,
       DateTime? paidOn,
       PayMethod method = PayMethod.cash,
       String? note}) async {
     await repo.markPaid(unit, _month.year, _month.month,
-        amount: amount, paidOn: paidOn, method: method, note: note);
+        amount: amount ?? rowFor(unit.id)?.rentDue,
+        paidOn: paidOn,
+        method: method,
+        note: note);
     await refresh();
   }
 
@@ -148,9 +154,10 @@ class LedgerProvider extends ChangeNotifier {
     await refresh();
   }
 
-  // ---- Charges (variable per-month utility/service fees) -----------------
+  // ---- Charges + rent deduction (one row per unit-month) -----------------
 
-  /// This unit's charges for the selected month (null = none recorded yet).
+  /// This unit's charges row (utilities + rent deduction) for the selected
+  /// month (null = none recorded yet).
   Future<Charge?> chargesFor(int unitId) =>
       repo.chargesFor(unitId, _month.year, _month.month);
 
@@ -164,6 +171,15 @@ class LedgerProvider extends ChangeNotifier {
   }) async {
     await repo.setCharges(unitId, _month.year, _month.month,
         electricity: electricity, water: water, service: service);
+    await refresh();
+  }
+
+  /// Record the landlord's rent deduction for this unit in the selected month
+  /// (0 clears it), then refresh — it changes the month's due everywhere.
+  Future<void> setDeduction(int unitId,
+      {required int amount, String? note}) async {
+    await repo.setDeduction(unitId, _month.year, _month.month,
+        amount: amount, note: note);
     await refresh();
   }
 

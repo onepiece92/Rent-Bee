@@ -4,8 +4,14 @@ import 'package:flutter/material.dart';
 
 import '../../app/theme.dart';
 
-/// The navy gradient background with four soft drifting orbs + a fine grain
-/// overlay (ported from the prototype's `bg` / `orb` / `grain` styles).
+/// The navy gradient background with four soft orbs + a fine grain overlay
+/// (ported from the prototype's `bg` / `orb` / `grain` styles).
+///
+/// This sits under every screen, so it is deliberately static and cheap: the
+/// orbs are radial-gradient discs (not live blurs) and no longer drift. A
+/// moving background forced every [BackdropFilter] above it to re-sample each
+/// frame — the app's single largest steady-state GPU cost; now the whole layer
+/// is composited once and left alone until something real changes.
 class BrandBackground extends StatelessWidget {
   final Widget child;
   const BrandBackground({super.key, required this.child});
@@ -32,66 +38,45 @@ class BrandBackground extends StatelessWidget {
   }
 }
 
-class _OrbField extends StatefulWidget {
+/// The four orbs, laid out once inside their own repaint boundary.
+class _OrbField extends StatelessWidget {
   const _OrbField();
-  @override
-  State<_OrbField> createState() => _OrbFieldState();
-}
-
-class _OrbFieldState extends State<_OrbField>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: const Duration(seconds: 14),
-  )..repeat();
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
-    // (color, size, top, left, right, bottom, phase)
+    // (color, size, top, left, right, bottom)
     const orbs = [
-      (Brand.orange, 260.0, -60.0, -50.0, null, null, 0.0),
-      (Brand.orbBlue, 220.0, 120.0, null, -70.0, null, -4 / 14),
-      (Brand.orangeWarm, 240.0, null, -60.0, null, 80.0, -8 / 14),
-      (Brand.navy, 200.0, null, null, -30.0, -50.0, -2 / 14),
+      (Brand.orange, 260.0, -60.0, -50.0, null, null),
+      (Brand.orbBlue, 220.0, 120.0, null, -70.0, null),
+      (Brand.orangeWarm, 240.0, null, -60.0, null, 80.0),
+      (Brand.navy, 200.0, null, null, -30.0, -50.0),
     ];
     return ClipRect(
-      child: AnimatedBuilder(
-        animation: _c,
-        builder: (context, _) {
-          return Stack(
-            children: [
-              for (final o in orbs)
-                _DriftingOrb(
-                  t: (_c.value + o.$7) % 1.0,
-                  color: o.$1,
-                  size: o.$2,
-                  top: o.$3,
-                  left: o.$4,
-                  right: o.$5,
-                  bottom: o.$6,
-                ),
-            ],
-          );
-        },
+      child: RepaintBoundary(
+        child: Stack(
+          children: [
+            for (final o in orbs)
+              _Orb(
+                color: o.$1,
+                size: o.$2,
+                top: o.$3,
+                left: o.$4,
+                right: o.$5,
+                bottom: o.$6,
+              ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _DriftingOrb extends StatelessWidget {
-  final double t; // 0..1 cycle
+class _Orb extends StatelessWidget {
   final Color color;
   final double size;
   final double? top, left, right, bottom;
 
-  const _DriftingOrb({
-    required this.t,
+  const _Orb({
     required this.color,
     required this.size,
     this.top,
@@ -100,32 +85,31 @@ class _DriftingOrb extends StatelessWidget {
     this.bottom,
   });
 
+  /// How far the soft edge extends past the disc — stands in for the ~σ=60
+  /// blur halo the prototype had, so the orbs keep their size and placement.
+  static const _halo = 60.0;
+
   @override
   Widget build(BuildContext context) {
-    // drift: midpoint of cycle offsets by (18,-22) and scales 1.08
-    final phase = (0.5 - (t - 0.5).abs()) * 2; // 0→1→0 triangle
-    final dx = 18 * phase;
-    final dy = -22 * phase;
-    final scale = 1 + 0.08 * phase;
+    // The gradient box is the disc plus its halo, so pull each anchored edge
+    // back by the halo to keep the visible centre where the blurred disc was.
     return Positioned(
-      top: top,
-      left: left,
-      right: right,
-      bottom: bottom,
-      child: Transform.translate(
-        offset: Offset(dx, dy),
-        child: Transform.scale(
-          scale: scale,
-          child: ImageFiltered(
-            imageFilter: ImageFilter.blur(sigmaX: 60, sigmaY: 60),
-            child: Container(
-              width: size,
-              height: size,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.5),
-                shape: BoxShape.circle,
-              ),
-            ),
+      top: top == null ? null : top! - _halo,
+      left: left == null ? null : left! - _halo,
+      right: right == null ? null : right! - _halo,
+      bottom: bottom == null ? null : bottom! - _halo,
+      child: Container(
+        width: size + 2 * _halo,
+        height: size + 2 * _halo,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(
+            colors: [
+              color.withValues(alpha: 0.5),
+              color.withValues(alpha: 0.28),
+              color.withValues(alpha: 0.0),
+            ],
+            stops: const [0.0, 0.45, 1.0],
           ),
         ),
       ),
@@ -137,8 +121,8 @@ class _Grain extends StatelessWidget {
   const _Grain();
   @override
   Widget build(BuildContext context) {
-    // RepaintBoundary isolates the static grain into its own layer so the
-    // animated orb sibling's repaints don't re-run _GrainPainter's ~35k circles.
+    // RepaintBoundary isolates the static grain into its own layer so a repaint
+    // anywhere else never re-runs _GrainPainter's ~35k circles.
     return IgnorePointer(
       child: RepaintBoundary(
         child: Opacity(
@@ -180,6 +164,11 @@ class GlassPanel extends StatelessWidget {
   /// scroll-jank source (N blur layers). Keep it on for hero/standalone panels.
   final bool blur;
 
+  /// Outer drop shadow. It's a 32px Gaussian blur of the panel's outline, so
+  /// like [blur] it costs a blur pass per panel per frame — list tiles pass
+  /// `shadow: false` (it's barely visible on the navy background anyway).
+  final bool shadow;
+
   const GlassPanel({
     super.key,
     required this.child,
@@ -188,7 +177,20 @@ class GlassPanel extends StatelessWidget {
     this.onTap,
     this.sheen = false,
     this.blur = true,
+    this.shadow = true,
   });
+
+  /// The cheap variant for list rows and small repeated tiles: no backdrop
+  /// blur and no drop shadow, so a screen full of them costs no blur passes.
+  const GlassPanel.tile({
+    super.key,
+    required this.child,
+    this.padding = const EdgeInsets.all(16),
+    this.borderRadius,
+    this.onTap,
+  })  : sheen = false,
+        blur = false,
+        shadow = false;
 
   @override
   Widget build(BuildContext context) {
@@ -239,13 +241,15 @@ class GlassPanel extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: radius,
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x66060618), // 0 8px 32px rgba(6,6,24,.4)
-            blurRadius: 32,
-            offset: Offset(0, 8),
-          ),
-        ],
+        boxShadow: shadow
+            ? const [
+                BoxShadow(
+                  color: Color(0x66060618), // 0 8px 32px rgba(6,6,24,.4)
+                  blurRadius: 32,
+                  offset: Offset(0, 8),
+                ),
+              ]
+            : null,
       ),
       child: ClipRRect(
         borderRadius: radius,

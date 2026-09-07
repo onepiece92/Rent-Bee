@@ -88,7 +88,7 @@ class UnitDetailSheet extends StatelessWidget {
               onTap: (s.phone == null || s.phone!.isEmpty)
                   ? null
                   : () => sendRentReminder(context, s, ledger.month,
-                      paid: row.isPaid),
+                      paid: row.isPaid, amount: row.rentDue),
               trailingIcon: (s.phone == null || s.phone!.isEmpty)
                   ? null
                   : Icons.sms_outlined,
@@ -117,10 +117,12 @@ class UnitDetailSheet extends StatelessWidget {
         const SizedBox(height: 16),
 
         // big Collect / Undo button
-        _BigToggleButton(unit: s, payment: row.payment, month: ledger.month),
+        _BigToggleButton(row: row, month: ledger.month),
 
         const SizedBox(height: 20),
-        ChargesSection(unitId: s.id, month: ledger.month),
+        // Charges + deduction sections, fed by a single charges-row load.
+        UnitMonthAdjustments(
+            unitId: s.id, monthlyRent: s.monthlyRent, month: ledger.month),
 
         const SizedBox(height: 20),
         const Text('Recent months',
@@ -160,26 +162,37 @@ class UnitDetailSheet extends StatelessWidget {
 }
 
 class _BigToggleButton extends StatelessWidget {
-  final Unit unit;
-  final Payment? payment;
+  final UnitRow row;
   final BsMonth month;
-  const _BigToggleButton(
-      {required this.unit, required this.payment, required this.month});
+  const _BigToggleButton({required this.row, required this.month});
+
+  Unit get unit => row.unit;
+  Payment? get payment => row.payment;
 
   @override
   Widget build(BuildContext context) {
     final ledger = context.read<LedgerProvider>();
     final mode = context.watch<SettingsProvider>().calendar;
-    final rent = unit.monthlyRent;
-    final paidAmount = payment?.amount ?? 0;
-    final status = paidAmount <= 0
-        ? PayStatus.pending
-        : paidAmount >= rent
-            ? PayStatus.paid
-            : PayStatus.partial;
+    // Everything here is against the month's *due* — rent less any deduction
+    // for goods taken from the shop — not the headline rent.
+    final rent = row.rentDue;
+    final paidAmount = row.paidAmount;
 
-    switch (status) {
+    switch (row.status) {
       case PayStatus.paid:
+        if (payment == null) {
+          // The deduction alone covered the rent — no cash to collect or undo.
+          return _BaseBigButton(
+            onTap: () {},
+            bg: Brand.paid.withValues(alpha: 0.12),
+            border: Brand.paidPillBorder,
+            child: const Text('Covered by deduction · nothing to collect',
+                style: TextStyle(
+                    color: Brand.paidText,
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700)),
+          );
+        }
         final paidOn = payment!.paidOn;
         final on = paidOn != null ? dateLabel(paidOn, mode) : '—';
         return _BaseBigButton(
@@ -194,7 +207,7 @@ class _BigToggleButton extends StatelessWidget {
         );
 
       case PayStatus.partial:
-        final remaining = (rent - paidAmount).clamp(0, rent);
+        final remaining = row.remaining;
         return Column(
           children: [
             _BaseBigButton(
@@ -241,6 +254,20 @@ class _BigToggleButton extends StatelessWidget {
         );
 
       case PayStatus.pending:
+        if (rent == 0) {
+          // Rent 0 and nothing deducted: there is nothing to collect, and a
+          // Collect tap would only write an empty payment row.
+          return _BaseBigButton(
+            onTap: () {},
+            bg: Brand.glassBg,
+            border: Brand.glassBorder,
+            child: const Text('No rent set for this unit',
+                style: TextStyle(
+                    color: Brand.muted,
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700)),
+          );
+        }
         return Column(
           children: [
             _BaseBigButton(
@@ -248,18 +275,31 @@ class _BigToggleButton extends StatelessWidget {
               gradient: Brand.orangeGradient,
               border: Colors.white.withValues(alpha: 0.3),
               glow: true,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.arrow_downward,
-                      size: 17, color: Colors.white),
-                  const SizedBox(width: 7),
-                  Text(
-                      'Collect ${Money.format(rent)} for ${month.monthNameIn(mode)}',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w700)),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.arrow_downward,
+                          size: 17, color: Colors.white),
+                      const SizedBox(width: 7),
+                      Text(
+                          'Collect ${Money.format(rent)} for ${month.monthNameIn(mode)}',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+                  if (row.deduction > 0) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                        '${Money.format(unit.monthlyRent)} rent − '
+                        '${Money.format(row.deduction)} deducted',
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 12)),
+                  ],
                 ],
               ),
             ),
@@ -288,8 +328,13 @@ class _BigToggleButton extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'Rent is ${Money.format(unit.monthlyRent)}. Enter the total '
-              'received for ${month.monthName} ${month.year}.',
+              row.deduction > 0
+                  ? 'Due is ${Money.format(row.rentDue)} '
+                      '(${Money.format(unit.monthlyRent)} rent − '
+                      '${Money.format(row.deduction)} deducted). Enter the '
+                      'total received for ${month.monthName} ${month.year}.'
+                  : 'Rent is ${Money.format(unit.monthlyRent)}. Enter the '
+                      'total received for ${month.monthName} ${month.year}.',
               style: const TextStyle(color: Brand.muted, fontSize: 13),
             ),
             const SizedBox(height: 12),

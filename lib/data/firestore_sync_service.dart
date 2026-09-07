@@ -113,10 +113,12 @@ class FirestoreSyncService {
     _fire(() => _payments.doc(_childId(unitCloudId, year, month)).delete());
   }
 
+  /// Merge rather than replace, so a build that doesn't know a newer field
+  /// can't strip it from the doc when it saves the fields it does know.
   void upsertCharge(Charge c, String unitCloudId) {
     _fire(() => _charges
         .doc(_childId(unitCloudId, c.year, c.month))
-        .set(_chargeToMap(c, unitCloudId)));
+        .set(_chargeToMap(c, unitCloudId), SetOptions(merge: true)));
   }
 
   void deleteCharge(String unitCloudId, int year, int month) {
@@ -396,6 +398,16 @@ class FirestoreSyncService {
       electricity: Value((data['electricity'] as num?)?.toInt() ?? 0),
       water: Value((data['water'] as num?)?.toInt() ?? 0),
       service: Value((data['service'] as num?)?.toInt() ?? 0),
+      // A doc saved by a build that predates the deduction has no such keys:
+      // keep whatever this device has recorded instead of zeroing it (an
+      // absent column is left untouched by the upsert; a new row defaults to
+      // none).
+      deduction: data.containsKey('deduction')
+          ? Value((data['deduction'] as num?)?.toInt() ?? 0)
+          : const Value.absent(),
+      deductionNote: data.containsKey('deductionNote')
+          ? Value(data['deductionNote'] as String?)
+          : const Value.absent(),
     ));
     return true;
   }
@@ -475,6 +487,8 @@ class FirestoreSyncService {
         'electricity': c.electricity,
         'water': c.water,
         'service': c.service,
+        'deduction': c.deduction,
+        'deductionNote': c.deductionNote,
         'createdAt': Timestamp.fromDate(c.createdAt),
         'updatedAt': FieldValue.serverTimestamp(),
       };

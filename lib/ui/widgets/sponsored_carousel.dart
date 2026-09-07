@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -64,11 +65,29 @@ class _SponsoredCarouselState extends State<SponsoredCarousel> {
   Timer? _timer;
   int _current = 0;
 
+  /// Whether this subtree's tickers are enabled — false while the tab is
+  /// parked off-screen (the shell keeps every branch alive). The auto-advance
+  /// timer only exists while it's true, so a hidden carousel does no work and
+  /// the cadence restarts cleanly when the tab comes back.
+  ValueListenable<TickerModeData>? _tickerMode;
+
   @override
-  void initState() {
-    super.initState();
-    if (widget.sponsors.length > 1) {
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final notifier = TickerMode.getValuesNotifier(context);
+    if (identical(notifier, _tickerMode)) return;
+    _tickerMode?.removeListener(_syncTimer);
+    _tickerMode = notifier..addListener(_syncTimer);
+    _syncTimer();
+  }
+
+  void _syncTimer() {
+    final enabled = _tickerMode?.value.enabled ?? true;
+    if (enabled && _timer == null && widget.sponsors.length > 1) {
       _timer = Timer.periodic(widget.interval, (_) => _advance());
+    } else if (!enabled) {
+      _timer?.cancel();
+      _timer = null;
     }
   }
 
@@ -84,6 +103,7 @@ class _SponsoredCarouselState extends State<SponsoredCarousel> {
 
   @override
   void dispose() {
+    _tickerMode?.removeListener(_syncTimer);
     _timer?.cancel();
     _controller.dispose();
     super.dispose();
@@ -168,7 +188,7 @@ class _SponsorCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassPanel(
+    return GlassPanel.tile(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       borderRadius: BorderRadius.circular(16),
       onTap: onTap,

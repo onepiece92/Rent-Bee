@@ -52,6 +52,7 @@ void main() {
         note: 'partial then topped up');
     await repo.setCharges(id, 2082, 2,
         electricity: 1500, water: 300, service: 400);
+    await repo.setDeduction(id, 2082, 2, amount: 700, note: 'flour');
 
     final json = await repo.exportBackupJson();
 
@@ -94,6 +95,8 @@ void main() {
     expect(c.electricity, 1500);
     expect(c.water, 300);
     expect(c.service, 400);
+    expect(c.deduction, 700);
+    expect(c.deductionNote, 'flour');
   });
 
   test('restore reassigns local ids and keeps payment/charge links correct',

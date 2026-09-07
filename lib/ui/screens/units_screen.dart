@@ -58,11 +58,10 @@ class UnitsScreen extends StatelessWidget {
                 separatorBuilder: (_, i) => const SizedBox(height: 9),
                 itemBuilder: (context, i) {
                   final s = units[i].unit;
-                  return GlassPanel(
+                  return GlassPanel.tile(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
                     borderRadius: BorderRadius.circular(18),
-                    blur: false, // list tile — avoid a live blur layer per row
                     onTap: () => UnitDetailSheet.show(context, s.id),
                     child: Row(
                       children: [

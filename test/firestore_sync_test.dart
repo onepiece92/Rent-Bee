@@ -124,6 +124,7 @@ void main() {
     await d1.repo.markPaid(a, 2082, 2); // full
     await d1.repo.markPaid(a, 2082, 3, amount: 8000); // partial
     await d1.repo.setCharges(aId, 2082, 2, electricity: 1200, water: 300);
+    await d1.repo.setDeduction(aId, 2082, 2, amount: 400, note: 'sugar');
 
     // A second unit that has moved out with the deposit returned — the
     // "due back is settled" case must restore exactly (active=false, refunded).
@@ -173,6 +174,8 @@ void main() {
     expect(ch, isNotNull);
     expect(ch!.electricity, 1200);
     expect(ch.water, 300);
+    expect(ch.deduction, 400);
+    expect(ch.deductionNote, 'sugar');
 
     // The derived liability matches: A-01's 36000 held; B-02 refunded → 0 owed.
     final liab = await d2.repo.depositLiability();
