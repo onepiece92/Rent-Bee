@@ -384,10 +384,13 @@ class _IncomeBreakdown extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = summary;
+    final currency = context.watch<SettingsProvider>().currency;
     final parts = [
-      'Rent ${Money.format(s.rentExpected)}',
-      if (s.chargesExpected > 0) '+ Charges ${Money.format(s.chargesExpected)}',
-      if (s.deductions > 0) '− Deductions ${Money.format(s.deductions)}',
+      'Rent ${Money.format(s.rentExpected, currency)}',
+      if (s.chargesExpected > 0)
+        '+ Charges ${Money.format(s.chargesExpected, currency)}',
+      if (s.deductions > 0)
+        '− Deductions ${Money.format(s.deductions, currency)}',
     ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
@@ -437,6 +440,7 @@ class _BreakdownRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final currency = context.watch<SettingsProvider>().currency;
     final full = bucket.collected >= bucket.expected && bucket.expected > 0;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -469,7 +473,8 @@ class _BreakdownRow extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Text(
-            '${Money.format(bucket.collected)} / ${Money.format(bucket.expected)}',
+            '${Money.format(bucket.collected, currency)} / '
+            '${Money.format(bucket.expected, currency)}',
             style: const TextStyle(
               fontSize: 12,
               color: Brand.muted,
@@ -493,6 +498,7 @@ class _OutstandingRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final u = debt.unit;
     final hasPhone = u.phone != null && u.phone!.isNotEmpty;
+    final currency = context.watch<SettingsProvider>().currency;
     return GlassPanel.tile(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       // The row is the shortcut to act on the debt: open the unit's sheet.
@@ -519,13 +525,14 @@ class _OutstandingRow extends StatelessWidget {
                 anchor,
                 paid: false,
                 amount: debt.amountOwed,
+                currency: currency,
                 months: debt.monthsUnpaid,
               ),
             ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(Money.format(debt.amountOwed),
+              Text(Money.format(debt.amountOwed, currency),
                   style: const TextStyle(
                     fontWeight: FontWeight.w700,
                     fontFeatures: [FontFeature.tabularFigures()],
@@ -581,6 +588,7 @@ class _DepositCardState extends State<_DepositCard> {
   @override
   Widget build(BuildContext context) {
     final l = widget.liability;
+    final currency = context.watch<SettingsProvider>().currency;
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
       child: GlassPanel(
@@ -598,7 +606,7 @@ class _DepositCardState extends State<_DepositCard> {
                       style: TextStyle(color: Brand.muted, fontSize: 12)),
                 ),
                 Text(
-                  Money.format(l.total),
+                  Money.format(l.total, currency),
                   style: const TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w700,
@@ -666,7 +674,7 @@ class _DepositCardState extends State<_DepositCard> {
                                             const TextStyle(fontSize: 13)),
                                   ),
                                   Text(
-                                    Money.format(u.depositAmount),
+                                    Money.format(u.depositAmount, currency),
                                     style: const TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w600,
@@ -705,6 +713,7 @@ class _DepositLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final currency = context.watch<SettingsProvider>().currency;
     return Row(
       children: [
         if (warn) ...[
@@ -718,7 +727,7 @@ class _DepositLine extends StatelessWidget {
                   color: warn ? Brand.orangeSoft : Brand.muted)),
         ),
         Text(
-          Money.format(amount),
+          Money.format(amount, currency),
           style: TextStyle(
             fontSize: 14,
             color: color,
@@ -737,10 +746,11 @@ class _SummaryGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final currency = context.watch<SettingsProvider>().currency;
     final cells = [
-      ('Expected', Money.format(summary.expected), Brand.text),
-      ('Collected', Money.format(summary.collected), Brand.paidText),
-      ('Pending', Money.format(summary.pending), Brand.orangeSoft),
+      ('Expected', Money.format(summary.expected, currency), Brand.text),
+      ('Collected', Money.format(summary.collected, currency), Brand.paidText),
+      ('Pending', Money.format(summary.pending, currency), Brand.orangeSoft),
       ('Paid', '${summary.paidSlots}/${summary.totalSlots}', Brand.text),
     ];
     return Padding(

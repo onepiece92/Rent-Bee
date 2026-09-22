@@ -1074,7 +1074,11 @@ class LedgerRepository {
   /// this round-trips through [importBackupJson] exactly: deposits, utility
   /// charges, occupancy, lease-escalation anchors, payment methods and notes
   /// all survive. This is the file to use as a real backup.
-  Future<String> exportBackupJson({DateTime? exportedAt}) async {
+  /// [currency] is the ledger's active currency ('npr'/'usd') at export time —
+  /// carried so a restore doesn't silently revert to NPR (see
+  /// [SettingsProvider.currency], threaded in from the UI layer since the
+  /// repository has no settings dependency of its own).
+  Future<String> exportBackupJson({DateTime? exportedAt, String? currency}) async {
     final units = await allUnits();
     final payments = await allPayments();
     final charges = await allCharges();
@@ -1084,6 +1088,7 @@ class LedgerRepository {
       'formatVersion': backupFormatVersion,
       'schemaVersion': db.schemaVersion,
       'exportedAt': (exportedAt ?? DateTime.now()).toIso8601String(),
+      'currency': currency,
       'units': [for (final u in units) _unitToBackup(u)],
       'payments': [for (final p in payments) _paymentToBackup(p)],
       'charges': [for (final c in charges) _chargeToBackup(c)],
@@ -1099,7 +1104,8 @@ class LedgerRepository {
   /// the new ids. With sync on, the cloud copy is replaced in one sequenced
   /// erase-then-write afterwards (mirrors [generateDemoData]). Returns the
   /// number of rows written.
-  Future<({int units, int payments, int charges})> importBackupJson(
+  Future<({int units, int payments, int charges, String? currency})>
+      importBackupJson(
     String content,
   ) async {
     final Object? decoded = jsonDecode(content);
@@ -1136,7 +1142,12 @@ class LedgerRepository {
         await db.into(db.charges).insert(_chargeFromBackup(m, nu));
         cCount++;
       }
-      return (units: idMap.length, payments: pCount, charges: cCount);
+      return (
+        units: idMap.length,
+        payments: pCount,
+        charges: cCount,
+        currency: decoded['currency'] as String?,
+      );
     });
 
     // One sequenced cloud replace for the whole restored dataset.

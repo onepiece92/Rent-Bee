@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../app/theme.dart';
 import '../../domain/money.dart';
 import '../../state/ledger_provider.dart';
+import '../../state/settings_provider.dart';
 import '../sheets/unit_detail_sheet.dart';
 import '../widgets/glass.dart';
 
@@ -15,6 +16,7 @@ class UnitsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ledger = context.watch<LedgerProvider>();
+    final currency = context.watch<SettingsProvider>().currency;
     final units = ledger.allUnitsByCode;
     final activeRent = units
         .where((r) => r.unit.isActive)
@@ -35,7 +37,7 @@ class UnitsScreen extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     '${units.length} total · ${ledger.activeUnitCount} active · '
-                    '${Money.format(activeRent)}/mo expected',
+                    '${Money.format(activeRent, currency)}/mo expected',
                     style: const TextStyle(color: Brand.muted, fontSize: 12.5),
                   ),
                 ],
@@ -92,7 +94,7 @@ class UnitsScreen extends StatelessWidget {
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Text(Money.format(s.monthlyRent),
+                            Text(Money.format(s.monthlyRent, currency),
                                 style: const TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w700,

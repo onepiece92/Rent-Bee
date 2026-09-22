@@ -44,7 +44,8 @@ class FirestoreSyncService {
 
   /// Applies owner settings (calendar mode + escalation rate) arriving on the
   /// owner's settings doc.
-  void Function(String? calendarMode, num? rate)? onRemoteSettings;
+  void Function(String? calendarMode, num? rate, String? currency)?
+      onRemoteSettings;
 
   static const _kSyncedOnce = 'synced_once';
   static const _kOwnerUid = 'ledger_owner_uid';
@@ -145,12 +146,14 @@ class FirestoreSyncService {
 
   // ---- Owner settings (root user doc, alongside the ledger subcollections) --
 
-  /// Mirrors the owner's calendar mode ('bs'/'ad') and annual escalation rate so
-  /// they follow the login to other devices. The PIN stays device-local.
-  void pushSettings(String calendarMode, double rate) {
+  /// Mirrors the owner's calendar mode ('bs'/'ad'), currency ('npr'/'usd')
+  /// and annual escalation rate so they follow the login to other devices.
+  /// The PIN stays device-local.
+  void pushSettings(String calendarMode, double rate, String currency) {
     _fire(() => _root.set(
           {
             'calendarMode': calendarMode,
+            'currency': currency,
             'annualRaisePercent': rate,
             'settingsUpdatedAt': FieldValue.serverTimestamp(),
           },
@@ -312,6 +315,7 @@ class FirestoreSyncService {
     onRemoteSettings?.call(
       d['calendarMode'] as String?,
       d['annualRaisePercent'] as num?,
+      d['currency'] as String?,
     );
   }
 

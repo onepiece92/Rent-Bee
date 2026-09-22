@@ -19,7 +19,9 @@ class DepositCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ledger = context.read<LedgerProvider>();
-    final mode = context.watch<SettingsProvider>().calendar;
+    final settings = context.watch<SettingsProvider>();
+    final mode = settings.calendar;
+    final currency = settings.currency;
     final has = unit.depositAmount > 0;
     final refunded = unit.depositRefunded;
     final sub = !has
@@ -48,7 +50,10 @@ class DepositCell extends StatelessWidget {
                           color: Brand.muted,
                           fontWeight: FontWeight.w600)),
                   const SizedBox(height: 3),
-                  Text(has ? Money.format(unit.depositAmount) : 'None',
+                  Text(
+                      has
+                          ? Money.format(unit.depositAmount, currency)
+                          : 'None',
                       style: display(
                           fontSize: 18,
                           fontWeight: FontWeight.w600,
@@ -91,15 +96,16 @@ class DepositCell extends StatelessWidget {
 
   Future<void> _toggle(BuildContext context, LedgerProvider ledger) async {
     final next = !unit.depositRefunded;
+    final currency = context.read<SettingsProvider>().currency;
     final ok = await showGlassDialog<bool>(
       context,
       (ctx) => GlassDialog(
         title: next ? 'Refund deposit?' : 'Mark as held?',
         content: Text(next
-            ? 'Mark the ${Money.format(unit.depositAmount)} deposit as '
-                'returned to ${unit.tenantName}.'
-            : 'Mark the ${Money.format(unit.depositAmount)} deposit as '
-                'currently held again.'),
+            ? 'Mark the ${Money.format(unit.depositAmount, currency)} deposit '
+                'as returned to ${unit.tenantName}.'
+            : 'Mark the ${Money.format(unit.depositAmount, currency)} deposit '
+                'as currently held again.'),
         actions: [
           GlassDialogAction('Cancel',
               onPressed: () => Navigator.pop(ctx, false)),

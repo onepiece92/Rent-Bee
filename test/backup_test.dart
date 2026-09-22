@@ -61,7 +61,7 @@ void main() {
     final repo2 = LedgerRepository(db2);
     addTearDown(() => db2.close());
     final res = await repo2.importBackupJson(json);
-    expect(res, (units: 1, payments: 1, charges: 1));
+    expect(res, (units: 1, payments: 1, charges: 1, currency: null));
 
     final u = (await repo2.allUnits()).single;
     expect(u.code, 'A-01');

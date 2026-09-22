@@ -58,7 +58,7 @@ void main() {
     addTearDown(db2.close);
 
     final counts = await repo2.importBackupJson(json);
-    expect(counts, (units: 1, payments: 2, charges: 1));
+    expect(counts, (units: 1, payments: 2, charges: 1, currency: null));
 
     // Unit fields survive (note: int id is reassigned, cloudId is preserved).
     final restored = (await repo2.allUnits()).single;

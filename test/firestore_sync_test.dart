@@ -260,13 +260,14 @@ void main() {
     expect(unitDocs.docs.single.data()['code'], 'C-01');
   });
 
-  test('owner settings (calendar + rate) round-trip across devices', () async {
+  test('owner settings (calendar + currency + rate) round-trip across devices',
+      () async {
     final fake = FakeFirebaseFirestore();
     const uid = 'settings-owner';
     final d1 = await _device(fake, uid);
 
     // Device 1 mirrors its preferences up.
-    d1.sync.pushSettings('ad', 7.5);
+    d1.sync.pushSettings('ad', 7.5, 'usd');
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
     // A fresh device pulls them at sign-in via fetchSettings.
@@ -274,21 +275,25 @@ void main() {
     final fetched = await d2.sync.fetchSettings();
     expect(fetched?['calendarMode'], 'ad');
     expect((fetched?['annualRaisePercent'] as num).toDouble(), 7.5);
+    expect(fetched?['currency'], 'usd');
 
     // Its live listener applies a later change made on device 1.
     String? gotMode;
     num? gotRate;
-    d2.sync.onRemoteSettings = (m, r) {
+    String? gotCurrency;
+    d2.sync.onRemoteSettings = (m, r, c) {
       gotMode = m;
       gotRate = r;
+      gotCurrency = c;
     };
     d2.sync.attachListeners(() {}); // subscribes the root settings doc too
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
-    d1.sync.pushSettings('bs', 10);
+    d1.sync.pushSettings('bs', 10, 'npr');
     await Future<void>.delayed(const Duration(milliseconds: 80));
     expect(gotMode, 'bs');
     expect(gotRate?.toDouble(), 10);
+    expect(gotCurrency, 'npr');
 
     await d2.sync.detach();
   });

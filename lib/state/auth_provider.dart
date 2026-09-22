@@ -76,6 +76,18 @@ class AuthProvider extends ChangeNotifier {
   bool get unlocked => _unlocked;
   bool get hasPin => _hash != null;
 
+  /// True when this device has completed PIN setup at least once before.
+  /// PIN setup is mandatory onboarding (every user, guest or
+  /// phone-verified, calls [setPin]), so its absence reliably means a
+  /// genuinely fresh install — used to decide new-install-only defaults
+  /// (see SettingsProvider's calendar-mode default) without disturbing
+  /// existing users who never touched the setting in question. Checked
+  /// directly against prefs (not the loaded instance) so it reflects state
+  /// from *before* this app process ever ran, at the one point ([main])
+  /// where that distinction still matters.
+  static bool hasExistingInstall(SharedPreferences prefs) =>
+      prefs.containsKey(_kHash);
+
   /// True during a transient guest test session (see [enterGuestMode]).
   bool get isGuest => _guest;
 

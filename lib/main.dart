@@ -27,7 +27,8 @@ Future<void> main() async {
     // returning owner who unlocks with the local PIN keeps a fast cold start.
     final prefs = await SharedPreferences.getInstance();
     final auth = await AuthProvider.load(prefs);
-    final settings = SettingsProvider(prefs);
+    final settings = SettingsProvider(prefs,
+        isExistingInstall: AuthProvider.hasExistingInstall(prefs));
     final db = await openAppDatabase();
     final repo = LedgerRepository(db);
 
@@ -172,19 +173,22 @@ class _UnitLedgerAppState extends State<UnitLedgerApp>
           auth: _auth,
           onApply: () => _ledger.refresh(),
           status: _syncStatus,
-          onRemoteSettings: (mode, rate) =>
-              _settings.applyRemoteSettings(calendarMode: mode, rate: rate),
+          onRemoteSettings: (mode, rate, currency) => _settings
+              .applyRemoteSettings(
+                  calendarMode: mode, rate: rate, currency: currency),
           localCalendarMode: _settings.calendar.name,
           localRate: _settings.annualRaisePercent,
+          localCurrency: _settings.currency.name,
         );
-        // Mirror future settings changes (calendar + rate) to the cloud —
-        // unless the owner signed out while startSync was in flight (the stop
-        // branch below already ran in a re-entrant call; don't leave a stale
-        // push closure behind).
+        // Mirror future settings changes (calendar + currency + rate) to the
+        // cloud — unless the owner signed out while startSync was in flight
+        // (the stop branch below already ran in a re-entrant call; don't
+        // leave a stale push closure behind).
         if (service != null && _auth.phoneVerified) {
           _settings.cloudPush = () => service.pushSettings(
                 _settings.calendar.name,
                 _settings.annualRaisePercent,
+                _settings.currency.name,
               );
         }
       } catch (e) {

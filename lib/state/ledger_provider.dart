@@ -221,13 +221,17 @@ class LedgerProvider extends ChangeNotifier {
   }
 
   /// A full, lossless JSON snapshot of the ledger for backup (see
-  /// [LedgerRepository.exportBackupJson]).
-  Future<String> exportBackupJson() => repo.exportBackupJson();
+  /// [LedgerRepository.exportBackupJson]). [currency] is the ledger's active
+  /// currency name ('npr'/'usd'), passed in from the UI layer since this
+  /// provider has no settings dependency of its own.
+  Future<String> exportBackupJson({required String currency}) =>
+      repo.exportBackupJson(currency: currency);
 
   /// Restores a JSON backup, replacing all current data, then refreshes the
-  /// view. Returns the number of units/payments/charges written.
-  Future<({int units, int payments, int charges})> restoreBackup(
-      String content) async {
+  /// view. Returns the number of units/payments/charges written, plus the
+  /// backup's currency (if it carried one) for the caller to re-apply.
+  Future<({int units, int payments, int charges, String? currency})>
+      restoreBackup(String content) async {
     final res = await repo.importBackupJson(content);
     await refresh(showLoading: true);
     return res;

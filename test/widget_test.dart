@@ -10,13 +10,13 @@ import 'package:unit_ledger/domain/money.dart';
 void main() {
   group('Money', () {
     test('formats with en-IN grouping and Rs prefix', () {
-      expect(Money.format(180000), 'Rs 1,80,000');
-      expect(Money.format(18000), 'Rs 18,000');
-      expect(Money.format(0), 'Rs 0');
+      expect(Money.format(180000, Currency.npr), 'Rs 1,80,000');
+      expect(Money.format(18000, Currency.npr), 'Rs 18,000');
+      expect(Money.format(0, Currency.npr), 'Rs 0');
     });
     test('grouped omits the prefix but keeps en-IN grouping', () {
-      expect(Money.grouped(180000), '1,80,000');
-      expect(Money.grouped(0), '0');
+      expect(Money.grouped(180000, Currency.npr), '1,80,000');
+      expect(Money.grouped(0, Currency.npr), '0');
     });
   });
 

@@ -155,6 +155,7 @@ class ChargesSection extends StatelessWidget {
 
   Future<void> _edit(BuildContext context) async {
     final ledger = context.read<LedgerProvider>();
+    final currency = context.read<SettingsProvider>().currency;
     String pre(int v) => v == 0 ? '' : v.toString();
     final eCtrl = TextEditingController(text: pre(charge?.electricity ?? 0));
     final wCtrl = TextEditingController(text: pre(charge?.water ?? 0));
@@ -167,11 +168,16 @@ class ChargesSection extends StatelessWidget {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _ChargeField(controller: eCtrl, label: 'Electricity'),
+            _ChargeField(
+                controller: eCtrl, label: 'Electricity', currency: currency),
             const SizedBox(height: 10),
-            _ChargeField(controller: wCtrl, label: 'Water'),
+            _ChargeField(
+                controller: wCtrl, label: 'Water', currency: currency),
             const SizedBox(height: 10),
-            _ChargeField(controller: sCtrl, label: 'Service / other'),
+            _ChargeField(
+                controller: sCtrl,
+                label: 'Service / other',
+                currency: currency),
           ],
         ),
         actions: [
@@ -212,7 +218,9 @@ class DeductionSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final mode = context.watch<SettingsProvider>().calendar;
+    final settings = context.watch<SettingsProvider>();
+    final mode = settings.calendar;
+    final currency = settings.currency;
     final d = charge?.deduction ?? 0;
     final charges = charge == null
         ? 0
@@ -249,9 +257,10 @@ class DeductionSection extends StatelessWidget {
                 label: 'Total due this month',
                 note: charges > 0 || d > 0
                     ? [
-                        '${Money.format(monthlyRent)} rent',
-                        if (charges > 0) '+ ${Money.format(charges)} charges',
-                        if (d > 0) '− ${Money.format(d)} deducted',
+                        '${Money.format(monthlyRent, currency)} rent',
+                        if (charges > 0)
+                          '+ ${Money.format(charges, currency)} charges',
+                        if (d > 0) '− ${Money.format(d, currency)} deducted',
                       ].join(' ')
                     : null,
                 amount: netDue(monthlyRent, d, charges: charges),
@@ -264,6 +273,7 @@ class DeductionSection extends StatelessWidget {
 
   Future<void> _edit(BuildContext context) async {
     final ledger = context.read<LedgerProvider>();
+    final currency = context.read<SettingsProvider>().currency;
     final d = charge?.deduction ?? 0;
     final amountCtrl = TextEditingController(text: d == 0 ? '' : d.toString());
     final noteCtrl = TextEditingController(text: charge?.deductionNote ?? '');
@@ -276,12 +286,14 @@ class DeductionSection extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'Taken off the ${Money.format(monthlyRent)} rent — e.g. goods '
-              'or services you took from this shop. Leave blank to clear.',
+              'Taken off the ${Money.format(monthlyRent, currency)} rent — '
+              'e.g. goods or services you took from this shop. Leave blank '
+              'to clear.',
               style: const TextStyle(color: Brand.muted, fontSize: 13),
             ),
             const SizedBox(height: 12),
-            _ChargeField(controller: amountCtrl, label: 'Deduct'),
+            _ChargeField(
+                controller: amountCtrl, label: 'Deduct', currency: currency),
             const SizedBox(height: 10),
             TextField(
               controller: noteCtrl,
@@ -347,6 +359,7 @@ class _ChargeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final currency = context.watch<SettingsProvider>().currency;
     final hasNote = note != null && note!.isNotEmpty;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
@@ -378,7 +391,7 @@ class _ChargeRow extends StatelessWidget {
           Text(
               amount == 0 && !bold
                   ? '—'
-                  : '${negative ? '− ' : ''}${Money.format(amount)}',
+                  : '${negative ? '− ' : ''}${Money.format(amount, currency)}',
               style: display(
                   fontSize: bold ? 15 : 14,
                   fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
@@ -399,7 +412,9 @@ class _Hair extends StatelessWidget {
 class _ChargeField extends StatelessWidget {
   final TextEditingController controller;
   final String label;
-  const _ChargeField({required this.controller, required this.label});
+  final Currency currency;
+  const _ChargeField(
+      {required this.controller, required this.label, required this.currency});
 
   @override
   Widget build(BuildContext context) {
@@ -409,7 +424,7 @@ class _ChargeField extends StatelessWidget {
       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
       decoration: InputDecoration(
         labelText: label,
-        prefixText: 'Rs ',
+        prefixText: currency.symbol,
         isDense: true,
       ),
     );

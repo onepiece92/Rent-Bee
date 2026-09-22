@@ -277,6 +277,7 @@ class _SummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final currency = context.watch<SettingsProvider>().currency;
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
       child: GlassPanel(
@@ -308,7 +309,7 @@ class _SummaryCard extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              Money.format(summary.collected),
+              Money.format(summary.collected, currency),
               style: display(
                 fontSize: 37,
                 fontWeight: FontWeight.w600,
@@ -318,7 +319,7 @@ class _SummaryCard extends StatelessWidget {
             ),
             const SizedBox(height: 1),
             Text(
-              'of ${Money.format(summary.expected)} expected',
+              'of ${Money.format(summary.expected, currency)} expected',
               style: const TextStyle(fontSize: 12.5, color: Color(0xB3E2E6FF)),
             ),
             const SizedBox(height: 14),
@@ -349,7 +350,7 @@ class _SummaryCard extends StatelessWidget {
                     TextSpan(
                       children: [
                         TextSpan(
-                          text: Money.format(summary.pending),
+                          text: Money.format(summary.pending, currency),
                           style: const TextStyle(
                             fontWeight: FontWeight.w700,
                             fontFeatures: tabularNums,
@@ -528,6 +529,7 @@ class _UnitTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = row.unit;
     final paid = row.isPaid;
+    final currency = context.watch<SettingsProvider>().currency;
     return GlassPanel.tile(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
       borderRadius: BorderRadius.circular(18),
@@ -568,7 +570,7 @@ class _UnitTile extends StatelessWidget {
               // deduction for goods taken from the shop — so the card matches
               // the Collect action.
               Text(
-                Money.format(row.totalDue),
+                Money.format(row.totalDue, currency),
                 style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
@@ -579,9 +581,9 @@ class _UnitTile extends StatelessWidget {
                 Text(
                   [
                     if (row.charges > 0)
-                      '+ ${Money.format(row.charges)} charges',
+                      '+ ${Money.format(row.charges, currency)} charges',
                     if (row.deduction > 0)
-                      '− ${Money.format(row.deduction)} deducted',
+                      '− ${Money.format(row.deduction, currency)} deducted',
                   ].join(' · '),
                   style: const TextStyle(
                     color: Brand.muted,
@@ -608,14 +610,15 @@ class _UnitTile extends StatelessWidget {
                           context.read<LedgerProvider>().month,
                           paid: paid,
                           amount: row.totalDue,
+                          currency: currency,
                         ),
                       ),
                       const SizedBox(width: 8),
                     ],
                     switch (row.status) {
                       PayStatus.paid => const StatusPill(paid: true),
-                      PayStatus.partial =>
-                        _PartialPill(remaining: row.remaining),
+                      PayStatus.partial => _PartialPill(
+                          remaining: row.remaining, currency: currency),
                       // Nothing to collect (rent not set) → no pill at all.
                       PayStatus.pending when row.totalDue == 0 =>
                         const SizedBox.shrink(),
@@ -698,7 +701,8 @@ class _VacantPill extends StatelessWidget {
 /// Amber chip for a partially-paid unit, showing the remaining balance.
 class _PartialPill extends StatelessWidget {
   final int remaining;
-  const _PartialPill({required this.remaining});
+  final Currency currency;
+  const _PartialPill({required this.remaining, required this.currency});
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -714,7 +718,7 @@ class _PartialPill extends StatelessWidget {
           const Icon(Icons.timelapse, size: 12, color: Brand.orangeWarm),
           const SizedBox(width: 4),
           Text(
-            '${Money.format(remaining)} left',
+            '${Money.format(remaining, currency)} left',
             style: const TextStyle(
               color: Brand.orangeWarm,
               fontWeight: FontWeight.w700,

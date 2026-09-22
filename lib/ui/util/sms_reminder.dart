@@ -18,21 +18,25 @@ import '../widgets/toast.dart';
 /// accumulated over several months — quoting a single month's label there
 /// would misstate what the amount covers.
 String rentReminderText(Unit unit, BsMonth month,
-    {required bool paid, required int amount, int months = 1}) {
+    {required bool paid,
+    required int amount,
+    required Currency currency,
+    int months = 1}) {
   if (!paid && months > 1 && amount > 0) {
     return 'Hi ${unit.tenantName}, gentle reminder: outstanding rent of '
-        '${Money.format(amount)} across $months months is due. Thank you!';
+        '${Money.format(amount, currency)} across $months months is due. '
+        'Thank you!';
   }
   final when = '${month.monthName} ${month.year}';
   if (paid) {
     return amount > 0
         ? 'Hi ${unit.tenantName}, thank you — we have received your $when '
-            'rent of ${Money.format(amount)}.'
+            'rent of ${Money.format(amount, currency)}.'
         : 'Hi ${unit.tenantName}, thank you — your $when rent is settled.';
   }
   return amount > 0
       ? 'Hi ${unit.tenantName}, gentle reminder: rent of '
-          '${Money.format(amount)} for $when is due. Thank you!'
+          '${Money.format(amount, currency)} for $when is due. Thank you!'
       : 'Hi ${unit.tenantName}, gentle reminder: your $when rent is due. '
           'Thank you!';
 }
@@ -71,11 +75,12 @@ Future<void> sendRentReminder(
   BsMonth month, {
   required bool paid,
   required int amount,
+  required Currency currency,
   int months = 1,
 }) async {
   final phone = unit.phone;
   if (phone == null || phone.isEmpty) return;
   await sendSms(context, phone,
       body: rentReminderText(unit, month,
-          paid: paid, amount: amount, months: months));
+          paid: paid, amount: amount, currency: currency, months: months));
 }

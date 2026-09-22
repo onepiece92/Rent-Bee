@@ -34,7 +34,9 @@ class UnitDetailSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ledger = context.watch<LedgerProvider>();
-    final mode = context.watch<SettingsProvider>().calendar;
+    final settings = context.watch<SettingsProvider>();
+    final mode = settings.calendar;
+    final currency = settings.currency;
     final row = ledger.rowFor(unitId);
     if (row == null) return const SizedBox.shrink();
     final s = row.unit;
@@ -76,7 +78,9 @@ class UnitDetailSheet extends StatelessWidget {
         // detail grid
         Row(
           children: [
-            _DetailCell(label: 'Monthly rent', value: Money.format(s.monthlyRent)),
+            _DetailCell(
+                label: 'Monthly rent',
+                value: Money.format(s.monthlyRent, currency)),
             const SizedBox(width: 11),
             _DetailCell(
               label: 'Contact',
@@ -88,7 +92,9 @@ class UnitDetailSheet extends StatelessWidget {
               onTap: (s.phone == null || s.phone!.isEmpty)
                   ? null
                   : () => sendRentReminder(context, s, ledger.month,
-                      paid: row.isPaid, amount: row.totalDue),
+                      paid: row.isPaid,
+                      amount: row.totalDue,
+                      currency: currency),
               trailingIcon: (s.phone == null || s.phone!.isEmpty)
                   ? null
                   : Icons.sms_outlined,
@@ -164,10 +170,11 @@ class UnitDetailSheet extends StatelessWidget {
 /// "Rs 15,000 rent + Rs 800 charges − Rs 500 deducted" — the month's due
 /// spelled out, with zero parts omitted. Shown wherever the due differs from
 /// the headline rent so the math stays transparent.
-String _dueBreakdown(UnitRow row) => [
-      '${Money.format(row.unit.monthlyRent)} rent',
-      if (row.charges > 0) '+ ${Money.format(row.charges)} charges',
-      if (row.deduction > 0) '− ${Money.format(row.deduction)} deducted',
+String _dueBreakdown(UnitRow row, Currency currency) => [
+      '${Money.format(row.unit.monthlyRent, currency)} rent',
+      if (row.charges > 0) '+ ${Money.format(row.charges, currency)} charges',
+      if (row.deduction > 0)
+        '− ${Money.format(row.deduction, currency)} deducted',
     ].join(' ');
 
 class _BigToggleButton extends StatelessWidget {
@@ -181,7 +188,9 @@ class _BigToggleButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ledger = context.read<LedgerProvider>();
-    final mode = context.watch<SettingsProvider>().calendar;
+    final settings = context.watch<SettingsProvider>();
+    final mode = settings.calendar;
+    final currency = settings.currency;
     // Everything here is against the month's *due* — rent plus utility
     // charges, less any deduction for goods taken from the shop — not the
     // headline rent.
@@ -228,11 +237,15 @@ class _BigToggleButton extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('${Money.format(paidAmount)} of ${Money.format(due)} paid',
+                  Text(
+                      '${Money.format(paidAmount, currency)} of '
+                      '${Money.format(due, currency)} paid',
                       style: const TextStyle(
                           color: Colors.white70, fontSize: 12)),
                   const SizedBox(height: 2),
-                  Text('Collect remaining ${Money.format(remaining)}',
+                  Text(
+                      'Collect remaining '
+                      '${Money.format(remaining, currency)}',
                       style: const TextStyle(
                           color: Colors.white,
                           fontSize: 14.5,
@@ -295,7 +308,8 @@ class _BigToggleButton extends StatelessWidget {
                           size: 17, color: Colors.white),
                       const SizedBox(width: 7),
                       Text(
-                          'Collect ${Money.format(due)} for ${month.monthNameIn(mode)}',
+                          'Collect ${Money.format(due, currency)} for '
+                          '${month.monthNameIn(mode)}',
                           style: const TextStyle(
                               color: Colors.white,
                               fontSize: 14.5,
@@ -304,7 +318,7 @@ class _BigToggleButton extends StatelessWidget {
                   ),
                   if (row.charges > 0 || row.deduction > 0) ...[
                     const SizedBox(height: 2),
-                    Text(_dueBreakdown(row),
+                    Text(_dueBreakdown(row, currency),
                         style: const TextStyle(
                             color: Colors.white70, fontSize: 12)),
                   ],
@@ -327,6 +341,7 @@ class _BigToggleButton extends StatelessWidget {
   /// fully.
   Future<void> _recordPartial(
       BuildContext context, LedgerProvider ledger) async {
+    final currency = context.read<SettingsProvider>().currency;
     final ctrl = TextEditingController(
         text: payment == null ? '' : payment!.amount.toString());
     final result = await showGlassDialog<int>(
@@ -338,11 +353,12 @@ class _BigToggleButton extends StatelessWidget {
           children: [
             Text(
               row.charges > 0 || row.deduction > 0
-                  ? 'Due is ${Money.format(row.totalDue)} '
-                      '(${_dueBreakdown(row)}). Enter the '
+                  ? 'Due is ${Money.format(row.totalDue, currency)} '
+                      '(${_dueBreakdown(row, currency)}). Enter the '
                       'total received for ${month.monthName} ${month.year}.'
-                  : 'Rent is ${Money.format(unit.monthlyRent)}. Enter the '
-                      'total received for ${month.monthName} ${month.year}.',
+                  : 'Rent is ${Money.format(unit.monthlyRent, currency)}. '
+                      'Enter the total received for ${month.monthName} '
+                      '${month.year}.',
               style: const TextStyle(color: Brand.muted, fontSize: 13),
             ),
             const SizedBox(height: 12),
@@ -351,8 +367,8 @@ class _BigToggleButton extends StatelessWidget {
               autofocus: true,
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: const InputDecoration(
-                prefixText: 'Rs ',
+              decoration: InputDecoration(
+                prefixText: currency.symbol,
                 isDense: true,
               ),
             ),

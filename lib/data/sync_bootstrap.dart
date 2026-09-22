@@ -21,9 +21,11 @@ Future<FirestoreSyncService?> startSync({
   required AuthProvider auth,
   required VoidCallback onApply,
   SyncStatusController? status,
-  void Function(String? calendarMode, num? rate)? onRemoteSettings,
+  void Function(String? calendarMode, num? rate, String? currency)?
+      onRemoteSettings,
   String? localCalendarMode,
   double? localRate,
+  String? localCurrency,
 }) async {
   if (auth.isGuest || !auth.phoneVerified) {
     status?.setOff();
@@ -54,19 +56,24 @@ Future<FirestoreSyncService?> startSync({
   await service.reconcile();
   service.attachListeners(onApply);
 
-  // Owner settings (calendar mode + escalation rate): cloud wins if it has any
-  // value, otherwise seed it from this device so the first login establishes
-  // the preferences.
+  // Owner settings (calendar mode + currency + escalation rate): cloud wins
+  // if it has any value, otherwise seed it from this device so the first
+  // login establishes the preferences.
   final remote = await service.fetchSettings();
   final hasRemote = remote != null &&
-      (remote['calendarMode'] != null || remote['annualRaisePercent'] != null);
+      (remote['calendarMode'] != null ||
+          remote['annualRaisePercent'] != null ||
+          remote['currency'] != null);
   if (hasRemote) {
     onRemoteSettings?.call(
       remote['calendarMode'] as String?,
       remote['annualRaisePercent'] as num?,
+      remote['currency'] as String?,
     );
-  } else if (localCalendarMode != null && localRate != null) {
-    service.pushSettings(localCalendarMode, localRate);
+  } else if (localCalendarMode != null &&
+      localRate != null &&
+      localCurrency != null) {
+    service.pushSettings(localCalendarMode, localRate, localCurrency);
   }
   return service;
 }

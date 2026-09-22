@@ -42,6 +42,14 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 20),
+          const _SectionLabel('Currency'),
+          GlassPanel(
+            child: _CurrencyToggle(
+              currency: settings.currency,
+              onChanged: settings.setCurrency,
+            ),
+          ),
+          const SizedBox(height: 20),
           const _SectionLabel('Security'),
           GlassPanel(
             padding: EdgeInsets.zero,
@@ -336,11 +344,12 @@ class SettingsScreen extends StatelessWidget {
   /// [_restoreBackup].
   Future<void> _backup(BuildContext context) async {
     final ledger = context.read<LedgerProvider>();
+    final currency = context.read<SettingsProvider>().currency;
     final overlay = Overlay.of(context, rootOverlay: true);
     final origin = shareOriginFor(context);
     final stamp = DateTime.now().toIso8601String().split('T').first;
     try {
-      final json = await ledger.exportBackupJson();
+      final json = await ledger.exportBackupJson(currency: currency.name);
       await shareJson(json, 'rent-bee-backup-$stamp.json', origin: origin);
     } catch (e) {
       showToastOn(overlay, 'Backup failed: $e', error: true);
@@ -399,6 +408,15 @@ class SettingsScreen extends StatelessWidget {
     try {
       final content = utf8.decode(bytes, allowMalformed: true);
       final res = await ledger.restoreBackup(content);
+      // Re-apply the backup's currency, if it carried one, so a restore from
+      // a USD backup doesn't silently read back as NPR.
+      Currency? restoredCurrency;
+      for (final c in Currency.values) {
+        if (c.name == res.currency) restoredCurrency = c;
+      }
+      if (restoredCurrency != null && context.mounted) {
+        await context.read<SettingsProvider>().setCurrency(restoredCurrency);
+      }
       showToastOn(
           overlay,
           'Restored · ${res.units} units, ${res.payments} payments, '
@@ -494,6 +512,7 @@ class SettingsScreen extends StatelessWidget {
       (_) => _RaisePercentDialog(
         initial: settings.annualRaisePercent,
         sampleRent: sampleRent,
+        currency: settings.currency,
       ),
     );
     if (percent == null) return;
@@ -590,6 +609,63 @@ class _CalendarToggle extends StatelessWidget {
   }
 }
 
+/// Segmented NPR | USD switch for the ledger's currency.
+class _CurrencyToggle extends StatelessWidget {
+  final Currency currency;
+  final ValueChanged<Currency> onChanged;
+  const _CurrencyToggle({required this.currency, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Track rent in',
+            style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: Brand.muted)),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            for (final c in Currency.values) ...[
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => onChanged(c),
+                  behavior: HitTestBehavior.opaque,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    decoration: BoxDecoration(
+                      gradient: c == currency ? Brand.orangeGradient : null,
+                      color: c == currency ? null : Brand.glassBg,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                          color: c == currency
+                              ? Colors.transparent
+                              : Brand.glassBorder),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      c == Currency.npr
+                          ? 'Nepali Rupee (Rs)'
+                          : r'US Dollar ($)',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5,
+                        color: c == currency ? Colors.white : Brand.muted,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              if (c == Currency.npr) const SizedBox(width: 8),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+}
+
 /// Formats a percentage without a trailing ".0" — 8.0 → "8", 7.5 → "7.5".
 String fmtPercent(double p) =>
     p == p.truncateToDouble() ? p.toInt().toString() : p.toString();
@@ -600,7 +676,11 @@ String fmtPercent(double p) =>
 class _RaisePercentDialog extends StatefulWidget {
   final double initial;
   final int sampleRent;
-  const _RaisePercentDialog({required this.initial, required this.sampleRent});
+  final Currency currency;
+  const _RaisePercentDialog(
+      {required this.initial,
+      required this.sampleRent,
+      required this.currency});
 
   @override
   State<_RaisePercentDialog> createState() => _RaisePercentDialogState();
@@ -639,11 +719,11 @@ class _RaisePercentDialogState extends State<_RaisePercentDialog> {
       preview = 'Rents will not change automatically.';
     } else {
       final next = ((widget.sampleRent * (100 + pct)) / 100).round();
-      preview =
-          'Each active unit\'s rent rises ${fmtPercent(pct)}% on its anniversary '
-          'month, every year — e.g. ${Money.format(widget.sampleRent)} → '
-          '${Money.format(next)} after a year (rounded to whole rupees). '
-          'Recorded payments stay unchanged.';
+      preview = 'Each active unit\'s rent rises ${fmtPercent(pct)}% on its '
+          'anniversary month, every year — e.g. '
+          '${Money.format(widget.sampleRent, widget.currency)} → '
+          '${Money.format(next, widget.currency)} after a year (rounded to '
+          'whole units). Recorded payments stay unchanged.';
     }
 
     return GlassDialog(

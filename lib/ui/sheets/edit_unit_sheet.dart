@@ -162,7 +162,9 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final mode = context.watch<SettingsProvider>().calendar;
+    final settings = context.watch<SettingsProvider>();
+    final mode = settings.calendar;
+    final currencySymbol = settings.currency.symbol.trim();
     return Form(
       key: _formKey,
       child: Column(
@@ -198,7 +200,7 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
               Expanded(
                 child: _Field(
                   controller: _rent,
-                  label: 'Rent (Rs)',
+                  label: 'Rent ($currencySymbol)',
                   hint: '18000',
                   keyboardType: TextInputType.number,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -241,7 +243,7 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
           ),
           _Field(
             controller: _deposit,
-            label: 'Security deposit (Rs)',
+            label: 'Security deposit ($currencySymbol)',
             hint: 'e.g. 20000 — leave blank for none',
             keyboardType: TextInputType.number,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
