@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:unit_ledger/data/database.dart';
 import 'package:unit_ledger/data/ledger_repository.dart';
+import 'package:unit_ledger/domain/bs_calendar.dart';
 import 'package:unit_ledger/main.dart';
 import 'package:unit_ledger/state/auth_provider.dart';
 import 'package:unit_ledger/state/settings_provider.dart';
@@ -95,8 +96,10 @@ void main() {
       if (!paid) return;
       final unit =
           await (db.select(db.units)..where((u) => u.id.equals(id))).getSingle();
-      // Jestha 2082 is the app's default month (see main.dart).
-      await repo.markPaid(unit, 2082, 2, paidOn: DateTime(2025, 5, 28));
+      // The app opens on the current BS month (see main.dart), so seed the
+      // paid rows there.
+      final m = bsYearMonth(DateTime.now());
+      await repo.markPaid(unit, m.year, m.month, paidOn: DateTime.now());
     }
 
     // Eight units so the list fills an iPad canvas as well as a phone.

@@ -13,8 +13,11 @@ import 'state/ledger_provider.dart';
 import 'state/settings_provider.dart';
 import 'state/sync_status.dart';
 
-/// Default starting BS month (matches the spec's example header, Jestha 2082).
-const _initialMonth = BsMonth(2082, 2);
+/// Starting BS month: the month containing today.
+BsMonth _initialMonth() {
+  final now = bsYearMonth(DateTime.now());
+  return BsMonth(now.year, now.month);
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -107,7 +110,7 @@ class _UnitLedgerAppState extends State<UnitLedgerApp>
   late final AuthProvider _auth = widget.auth;
   late final SettingsProvider _settings = widget.settings;
   late final LedgerProvider _ledger =
-      LedgerProvider(widget.repo, initialMonth: _initialMonth)
+      LedgerProvider(widget.repo, initialMonth: _initialMonth())
         ..init(annualRaisePercent: widget.settings.annualRaisePercent);
   late final _router = buildRouter(_auth);
   final SyncStatusController _syncStatus = SyncStatusController();

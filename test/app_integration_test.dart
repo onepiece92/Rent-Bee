@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:unit_ledger/data/database.dart';
 import 'package:unit_ledger/data/ledger_repository.dart';
+import 'package:unit_ledger/domain/bs_calendar.dart';
 import 'package:unit_ledger/main.dart';
 import 'package:unit_ledger/state/auth_provider.dart';
 import 'package:unit_ledger/state/settings_provider.dart';
@@ -130,18 +131,19 @@ void main() {
     auth.enterGuestMode();
     await settle(tester);
 
-    // Default month is Jestha 2082; nothing paid yet.
-    expect((await repo.summary(2082, 2)).collected, 0);
+    // The app opens on the current BS month; nothing paid yet.
+    final m = bsYearMonth(DateTime.now());
+    expect((await repo.summary(m.year, m.month)).collected, 0);
     expect(find.text('Mark paid'), findsOneWidget);
 
     await tester.tap(find.text('Mark paid'));
     await settle(tester);
 
     // Payment recorded at the unit's current rent, and the summary reflects it.
-    final payments = await repo.paymentsForMonth(2082, 2);
+    final payments = await repo.paymentsForMonth(m.year, m.month);
     expect(payments.length, 1);
     expect(payments.single.amount, 10000);
-    expect((await repo.summary(2082, 2)).collected, 10000);
+    expect((await repo.summary(m.year, m.month)).collected, 10000);
     // The pending pill is gone now that the month is settled.
     expect(find.text('Mark paid'), findsNothing);
   });
