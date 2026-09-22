@@ -564,19 +564,25 @@ class _UnitTile extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              // What's due this month — rent less any deduction for goods
-              // taken from the shop — so the card matches the Collect action.
+              // What's due this month — rent plus utility charges, less any
+              // deduction for goods taken from the shop — so the card matches
+              // the Collect action.
               Text(
-                Money.format(row.rentDue),
+                Money.format(row.totalDue),
                 style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
                   fontFeatures: tabularNums,
                 ),
               ),
-              if (row.deduction > 0)
+              if (row.charges > 0 || row.deduction > 0)
                 Text(
-                  '${Money.format(row.deduction)} deducted',
+                  [
+                    if (row.charges > 0)
+                      '+ ${Money.format(row.charges)} charges',
+                    if (row.deduction > 0)
+                      '− ${Money.format(row.deduction)} deducted',
+                  ].join(' · '),
                   style: const TextStyle(
                     color: Brand.muted,
                     fontSize: 10.5,
@@ -601,7 +607,7 @@ class _UnitTile extends StatelessWidget {
                           s,
                           context.read<LedgerProvider>().month,
                           paid: paid,
-                          amount: row.rentDue,
+                          amount: row.totalDue,
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -611,7 +617,7 @@ class _UnitTile extends StatelessWidget {
                       PayStatus.partial =>
                         _PartialPill(remaining: row.remaining),
                       // Nothing to collect (rent not set) → no pill at all.
-                      PayStatus.pending when row.rentDue == 0 =>
+                      PayStatus.pending when row.totalDue == 0 =>
                         const SizedBox.shrink(),
                       PayStatus.pending => _MarkPaidPill(
                         onTap: () => context.read<LedgerProvider>().markPaid(s),

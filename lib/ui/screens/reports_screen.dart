@@ -4,12 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/theme.dart';
+import '../../data/database.dart';
 import '../../domain/bs_calendar.dart';
 import '../../domain/models.dart';
 import '../../domain/money.dart';
 import '../../state/ledger_provider.dart';
 import '../../state/settings_provider.dart';
+import '../sheets/unit_detail_sheet.dart';
 import '../util/csv_share.dart';
+import '../util/sms_reminder.dart';
 import '../widgets/glass.dart';
 import '../widgets/toast.dart';
 
@@ -213,6 +216,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     scope: _scope,
                     summary: summary,
                     mode: mode,
+                    anchor: _anchor,
                     liability: _liability);
               },
             ),
@@ -301,11 +305,13 @@ class _ReportBody extends StatelessWidget {
   final ReportScope scope;
   final PeriodSummary summary;
   final CalendarMode mode;
+  final BsMonth anchor; // for the single-month reminder's label
   final Future<DepositLiability>? liability;
   const _ReportBody(
       {required this.scope,
       required this.summary,
       required this.mode,
+      required this.anchor,
       this.liability});
 
   @override
@@ -317,6 +323,8 @@ class _ReportBody extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 120), // clear the footer navbar
       children: [
         _SummaryGrid(summary: summary),
+        if (summary.chargesExpected > 0 || summary.deductions > 0)
+          _IncomeBreakdown(summary: summary),
         if (liability != null)
           FutureBuilder<DepositLiability>(
             future: liability,
@@ -355,13 +363,54 @@ class _ReportBody extends StatelessWidget {
             child: Column(
               children: [
                 for (final d in outstanding) ...[
-                  _OutstandingRow(debt: d, showMonths: isPeriod),
+                  _OutstandingRow(debt: d, showMonths: isPeriod, anchor: anchor),
                   const SizedBox(height: 8),
                 ],
               ],
             ),
           ),
       ],
+    );
+  }
+}
+
+/// What the period's Expected is made of — rent vs. utility charges vs.
+/// deductions. Only rendered when the period actually has charges or
+/// deductions, so an all-rent ledger keeps its uncluttered grid.
+class _IncomeBreakdown extends StatelessWidget {
+  final PeriodSummary summary;
+  const _IncomeBreakdown({required this.summary});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = summary;
+    final parts = [
+      'Rent ${Money.format(s.rentExpected)}',
+      if (s.chargesExpected > 0) '+ Charges ${Money.format(s.chargesExpected)}',
+      if (s.deductions > 0) '− Deductions ${Money.format(s.deductions)}',
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+      child: GlassPanel.tile(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            const Icon(Icons.functions, size: 15, color: Brand.muted),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                parts.join('  ·  '),
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  color: Brand.muted,
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -436,13 +485,18 @@ class _BreakdownRow extends StatelessWidget {
 class _OutstandingRow extends StatelessWidget {
   final PeriodDebt debt;
   final bool showMonths;
-  const _OutstandingRow({required this.debt, required this.showMonths});
+  final BsMonth anchor;
+  const _OutstandingRow(
+      {required this.debt, required this.showMonths, required this.anchor});
 
   @override
   Widget build(BuildContext context) {
     final u = debt.unit;
+    final hasPhone = u.phone != null && u.phone!.isNotEmpty;
     return GlassPanel.tile(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      // The row is the shortcut to act on the debt: open the unit's sheet.
+      onTap: () => UnitDetailSheet.show(context, u.id),
       child: Row(
         children: [
           Text(u.code,
@@ -453,6 +507,21 @@ class _OutstandingRow extends StatelessWidget {
             child: Text(u.tenantName,
                 maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
+          if (hasPhone)
+            IconButton(
+              tooltip: 'Send reminder',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.sms_outlined,
+                  size: 18, color: Brand.muted),
+              onPressed: () => sendRentReminder(
+                context,
+                u,
+                anchor,
+                paid: false,
+                amount: debt.amountOwed,
+                months: debt.monthsUnpaid,
+              ),
+            ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
@@ -475,13 +544,43 @@ class _OutstandingRow extends StatelessWidget {
 
 /// Standing deposit liability — total refundable money the landlord holds,
 /// split into deposits on active tenancies vs. vacated units overdue a refund.
-class _DepositCard extends StatelessWidget {
+/// With overdue refunds the card expands to list the vacated units; tapping
+/// one opens its sheet, where the refund is recorded (see DepositCell).
+class _DepositCard extends StatefulWidget {
   final DepositLiability liability;
   const _DepositCard({required this.liability});
 
   @override
+  State<_DepositCard> createState() => _DepositCardState();
+}
+
+class _DepositCardState extends State<_DepositCard> {
+  bool _expanded = false;
+  Future<List<Unit>>? _dueBack; // fetched on first expand only
+
+  void _toggle() {
+    setState(() {
+      _expanded = !_expanded;
+      _dueBack ??=
+          context.read<LedgerProvider>().repo.unitsOwingDepositRefund();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _DepositCard old) {
+    super.didUpdateWidget(old);
+    // The body re-fetches liability on every ledger change, handing this card
+    // a fresh instance — refetch the expanded list too, so a refund recorded
+    // from the sheet drops its row instead of lingering stale.
+    if (!identical(old.liability, widget.liability) && _dueBack != null) {
+      _dueBack =
+          context.read<LedgerProvider>().repo.unitsOwingDepositRefund();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final l = liability;
+    final l = widget.liability;
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
       child: GlassPanel(
@@ -516,12 +615,74 @@ class _DepositCard extends StatelessWidget {
             ),
             if (l.hasOverdue) ...[
               const SizedBox(height: 6),
-              _DepositLine(
-                label: 'Due back · ${l.dueBackCount} vacated',
-                amount: l.dueBack,
-                color: Brand.orangeSoft,
-                warn: true,
+              GestureDetector(
+                onTap: _toggle,
+                behavior: HitTestBehavior.opaque,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _DepositLine(
+                        label: 'Due back · ${l.dueBackCount} vacated',
+                        amount: l.dueBack,
+                        color: Brand.orangeSoft,
+                        warn: true,
+                      ),
+                    ),
+                    Icon(
+                      _expanded ? Icons.expand_less : Icons.expand_more,
+                      size: 18,
+                      color: Brand.muted,
+                    ),
+                  ],
+                ),
               ),
+              if (_expanded)
+                FutureBuilder<List<Unit>>(
+                  future: _dueBack,
+                  builder: (context, snap) {
+                    final units = snap.data;
+                    if (units == null) return const SizedBox.shrink();
+                    return Column(
+                      children: [
+                        for (final u in units)
+                          GestureDetector(
+                            onTap: () => UnitDetailSheet.show(context, u.id),
+                            behavior: HitTestBehavior.opaque,
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: Row(
+                                children: [
+                                  Text(u.code,
+                                      style: display(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: Brand.orangeSoft)),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(u.tenantName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style:
+                                            const TextStyle(fontSize: 13)),
+                                  ),
+                                  Text(
+                                    Money.format(u.depositAmount),
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      fontFeatures: [
+                                        FontFeature.tabularFigures()
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
             ],
           ],
         ),

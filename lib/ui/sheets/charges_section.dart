@@ -196,6 +196,7 @@ class ChargesSection extends StatelessWidget {
 /// the tenant's shop and settled against rent instead of cash. Reads the same
 /// (unit, month) [charge] row as [ChargesSection]; the amount comes off the
 /// month's due everywhere (Collect button, paid status, summaries, reports).
+/// Its bottom row is the month's grand total: rent + charges − deduction.
 class DeductionSection extends StatelessWidget {
   final int unitId;
   final int monthlyRent;
@@ -213,6 +214,9 @@ class DeductionSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final mode = context.watch<SettingsProvider>().calendar;
     final d = charge?.deduction ?? 0;
+    final charges = charge == null
+        ? 0
+        : charge!.electricity + charge!.water + charge!.service;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -239,9 +243,18 @@ class DeductionSection extends StatelessWidget {
                 amount: d,
                 negative: true),
             const _Hair(),
+            // The month's grand total: rent + charges − deduction — the same
+            // figure the Collect button and the home card show.
             _ChargeRow(
-                label: 'Rent due after deduction',
-                amount: netDue(monthlyRent, d),
+                label: 'Total due this month',
+                note: charges > 0 || d > 0
+                    ? [
+                        '${Money.format(monthlyRent)} rent',
+                        if (charges > 0) '+ ${Money.format(charges)} charges',
+                        if (d > 0) '− ${Money.format(d)} deducted',
+                      ].join(' ')
+                    : null,
+                amount: netDue(monthlyRent, d, charges: charges),
                 bold: true),
           ],
         ),

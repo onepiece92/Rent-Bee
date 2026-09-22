@@ -58,10 +58,11 @@ class Units extends Table {
 /// landlord's rent deduction. One row per (unit, month); absent row = nothing
 /// recorded yet.
 ///
-/// The three charges are tracked separately from rent and do NOT feed the rent
-/// collection summary — they are their own ledger. [deduction] is different:
-/// it lowers that month's rent due (see `netDue`), so it does flow into paid
-/// status, summaries and reports.
+/// Everything on this row feeds the month's due (see `netDue`): the three
+/// utility charges add to it, and [deduction] comes off it — so all of them
+/// flow into paid status, the Collect amount, summaries and reports. The
+/// month's due is `monthly_rent + electricity + water + service − deduction`,
+/// floored at 0.
 @DataClassName('Charge')
 class Charges extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -75,8 +76,8 @@ class Charges extends Table {
 
   /// Amount the landlord is deducting from this month's rent — typically goods
   /// or services bought from the tenant's shop and settled against rent rather
-  /// than paid in cash. Whole NPR, 0 = none. The month's due becomes
-  /// `monthly_rent − deduction`, floored at 0.
+  /// than paid in cash. Whole NPR, 0 = none. It comes off the month's due
+  /// (see the table comment above).
   IntColumn get deduction => integer().withDefault(const Constant(0))();
 
   /// What the deduction was for (e.g. "2 sacks rice"). Null when none.

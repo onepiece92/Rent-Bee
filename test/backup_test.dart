@@ -179,8 +179,7 @@ void main() {
     expect(units.single.code, 'KEEP-01');
   });
 
-  test('CSV export stays rent-only — proving the two formats are distinct',
-      () async {
+  test('CSV is the month sheet, JSON backup carries everything', () async {
     final id = await repo.createUnit(UnitsCompanion.insert(
       code: 'A-01',
       tenantName: 'Asha',
@@ -190,10 +189,11 @@ void main() {
     await repo.setCharges(id, 2082, 2, electricity: 1500);
 
     final csv = await repo.exportCsvRange(2082, 2, 2);
-    expect(csv, isNot(contains('1500')), reason: 'charges are not in the CSV');
+    expect(csv, contains('1500'),
+        reason: 'charges feed the month\'s due, so they travel in the CSV');
     expect(csv, isNot(contains('24000')), reason: 'deposits are not in the CSV');
 
-    // …but the JSON backup carries both.
+    // The JSON backup carries both.
     final json = await repo.exportBackupJson();
     expect(json, contains('1500'));
     expect(json, contains('24000'));

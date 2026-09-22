@@ -64,6 +64,30 @@ void main() {
       expect(r.depositRefunded, false);
       expect(r.depositRefundedOn, isNull);
     });
+
+    test('unitsOwingDepositRefund lists vacated, unrefunded holders only',
+        () async {
+      final active = await seed('R-01');
+      await repo.setDeposit(active, 10000); // active → not owed back
+
+      final refunded = await seed('R-02');
+      await repo.setDeposit(refunded, 20000);
+      await repo.updateUnit(
+          (await reload(refunded.id)).copyWith(isActive: false));
+      await repo.setDepositRefunded(await reload(refunded.id), true);
+
+      final owed = await seed('R-03');
+      await repo.setDeposit(owed, 30000);
+      await repo.updateUnit((await reload(owed.id)).copyWith(isActive: false));
+
+      final noDeposit = await seed('R-04'); // vacated but holds nothing
+      await repo
+          .updateUnit((await reload(noDeposit.id)).copyWith(isActive: false));
+
+      final list = await repo.unitsOwingDepositRefund();
+      expect(list.single.code, 'R-03');
+      expect(list.single.depositAmount, 30000);
+    });
   });
 
   group('charges', () {
@@ -133,13 +157,15 @@ void main() {
       expect(await db.select(db.charges).get(), isEmpty);
     });
 
-    test('charges do not affect the rent summary', () async {
+    test('charges add to the month\'s expected summary', () async {
       final u = await seed('B-09', rent: 10000);
       await repo.setCharges(u.id, 2082, 2,
           electricity: 800, water: 300, service: 500);
       final s = await repo.summary(2082, 2);
-      expect(s.expected, 10000); // rent only — charges excluded
+      expect(s.expected, 11600); // rent + charges
       expect(s.collected, 0);
+      // Only that month — the next one is rent alone.
+      expect((await repo.summary(2082, 3)).expected, 10000);
     });
   });
 
@@ -212,7 +238,7 @@ void main() {
       await repo.markPaid(u, 2082, 2, amount: 8500);
       final view = await repo.monthView(2082, 2);
       final row = view.rows.single;
-      expect(row.rentDue, 8500);
+      expect(row.totalDue, 8500);
       expect(row.status, PayStatus.paid);
       expect(row.remaining, 0);
       expect(view.summary.paidCount, 1);
@@ -236,7 +262,7 @@ void main() {
       await repo.setDeduction(u.id, 2082, 2, amount: 12000);
       final view = await repo.monthView(2082, 2);
       final row = view.rows.single;
-      expect(row.rentDue, 0);
+      expect(row.totalDue, 0);
       expect(row.status, PayStatus.paid);
       expect(view.summary.expected, 0);
       expect(view.summary.paidCount, 1);
@@ -271,11 +297,80 @@ void main() {
       expect(netDue(10000, 12000), 0);
       expect(netDue(10000, -5), 10000);
       expect(netDue(-500, 100), 0); // a negative rent must not throw
+      // Utility charges add to the due: rent + charges − deduction.
+      expect(netDue(10000, 0, charges: 800), 10800);
+      expect(netDue(10000, 1500, charges: 800), 9300);
+      expect(netDue(10000, 12000, charges: 800), 0); // still floored at 0
+      expect(netDue(10000, 0, charges: -5), 10000); // negative charge = 0
       expect(settles(paid: 8500, due: 8500, deduction: 1500), isTrue);
       expect(settles(paid: 0, due: 0, deduction: 12000), isTrue);
       expect(settles(paid: 0, due: 0, deduction: 0), isFalse); // nothing at all
       expect(settles(paid: 100, due: 0, deduction: 0), isTrue);
       expect(settles(paid: 8000, due: 8500, deduction: 1500), isFalse);
+    });
+
+    test('charges add to the month\'s due: row, summary, markPaid, history',
+        () async {
+      final u = await seed('D-20', rent: 10000);
+      await repo.setCharges(u.id, 2082, 2, electricity: 500, water: 300);
+      var view = await repo.monthView(2082, 2);
+      var row = view.rows.single;
+      expect(row.charges, 800);
+      expect(row.totalDue, 10800);
+      expect(view.summary.expected, 10800);
+
+      // Paying just the rent is now a partial month, not a settled one.
+      await repo.markPaid(u, 2082, 2, amount: 10000);
+      view = await repo.monthView(2082, 2);
+      row = view.rows.single;
+      expect(row.status, PayStatus.partial);
+      expect(row.remaining, 800);
+
+      // Blank markPaid settles at the full rent + charges figure.
+      await repo.markPaid(u, 2082, 2);
+      final pays = await repo.allPayments();
+      expect(pays.single.amount, 10800);
+      view = await repo.monthView(2082, 2);
+      expect(view.rows.single.status, PayStatus.paid);
+      expect(view.summary.paidCount, 1);
+
+      // History and period reports price the month with its charges.
+      final h = await repo.history(u.id, BsMonth(2082, 2), months: 1);
+      expect(h.single.expected, 10800);
+      expect(h.single.isPaid, isTrue);
+      final q = await repo.periodSummary(2082, 1, 3);
+      expect(q.expected, 30800); // 10000 + 10800 + 10000
+    });
+
+    test('charges and a deduction combine: rent + charges − deduction',
+        () async {
+      final u = await seed('D-21', rent: 10000);
+      await repo.setCharges(u.id, 2082, 2, electricity: 800);
+      await repo.setDeduction(u.id, 2082, 2, amount: 1500);
+      final view = await repo.monthView(2082, 2);
+      final row = view.rows.single;
+      expect(row.totalDue, 9300);
+      expect(view.summary.expected, 9300);
+      await repo.markPaid(u, 2082, 2);
+      expect((await repo.allPayments()).single.amount, 9300);
+    });
+
+    test('charges on a month before the tenant started are not owed',
+        () async {
+      final id = await repo.createUnit(UnitsCompanion.insert(
+        code: 'D-22',
+        tenantName: 'Late starter',
+        monthlyRent: 10000,
+        startedOn: Value(adForBsMonthStart(2082, 4)),
+      ));
+      await repo.setCharges(id, 2082, 2, electricity: 800); // pre-start month
+      final h = await repo.history(id, BsMonth(2082, 2), months: 1);
+      expect(h.single.expected, 0);
+      expect(h.single.isPaid, isFalse);
+      // Period reports agree: no phantom due from a pre-start charge.
+      final q = await repo.periodSummary(2082, 1, 12);
+      expect(q.expected, 9 * 10000); // months 4–12 only
+      expect(q.outstanding.single.monthsUnpaid, 9);
     });
 
     test('a negative rent (unfloored restore) still renders a month view',
@@ -284,7 +379,7 @@ void main() {
       await repo.setDeduction(u.id, 2082, 2, amount: 300);
       await repo.updateUnit(u.copyWith(monthlyRent: -500));
       final view = await repo.monthView(2082, 2);
-      expect(view.rows.single.rentDue, 0);
+      expect(view.rows.single.totalDue, 0);
       expect(view.summary.expected, 0);
     });
 
@@ -350,7 +445,7 @@ void main() {
       await repo.setDeduction(u.id, 2082, 2, amount: 1500, note: 'tea');
       await repo.markPaid(u, 2082, 2); // 8500 net
       final csv = await repo.exportCsvRange(2082, 2, 2);
-      expect(csv.trim().split('\n').last, endsWith(',8500,1500'));
+      expect(csv.trim().split('\n').last, endsWith(',8500,1500,,,'));
 
       final db2 = AppDatabase.forTesting(NativeDatabase.memory());
       final repo2 = LedgerRepository(db2);

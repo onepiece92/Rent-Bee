@@ -9,11 +9,20 @@ import '../widgets/toast.dart';
 
 /// The SMS body for [unit]'s rent in BS [month]: a polite due-reminder when
 /// unpaid, a thank-you when already collected. [amount] is the month's actual
-/// cash due (rent less any deduction) — required, because the headline rent is
-/// the wrong figure whenever a deduction exists. A zero amount (the deduction
-/// covered the rent, or no rent is set) never quotes "Rs 0".
+/// cash due (rent + utility charges − any deduction) — required, because the
+/// headline rent is the wrong figure whenever charges or a deduction exist. A
+/// zero amount (the deduction covered everything, or no rent is set) never
+/// quotes "Rs 0".
+///
+/// [months] > 1 switches to period wording ("across N months") for a debt
+/// accumulated over several months — quoting a single month's label there
+/// would misstate what the amount covers.
 String rentReminderText(Unit unit, BsMonth month,
-    {required bool paid, required int amount}) {
+    {required bool paid, required int amount, int months = 1}) {
+  if (!paid && months > 1 && amount > 0) {
+    return 'Hi ${unit.tenantName}, gentle reminder: outstanding rent of '
+        '${Money.format(amount)} across $months months is due. Thank you!';
+  }
   final when = '${month.monthName} ${month.year}';
   if (paid) {
     return amount > 0
@@ -62,9 +71,11 @@ Future<void> sendRentReminder(
   BsMonth month, {
   required bool paid,
   required int amount,
+  int months = 1,
 }) async {
   final phone = unit.phone;
   if (phone == null || phone.isEmpty) return;
   await sendSms(context, phone,
-      body: rentReminderText(unit, month, paid: paid, amount: amount));
+      body: rentReminderText(unit, month,
+          paid: paid, amount: amount, months: months));
 }

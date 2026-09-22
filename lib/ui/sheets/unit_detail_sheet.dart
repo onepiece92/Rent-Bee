@@ -88,7 +88,7 @@ class UnitDetailSheet extends StatelessWidget {
               onTap: (s.phone == null || s.phone!.isEmpty)
                   ? null
                   : () => sendRentReminder(context, s, ledger.month,
-                      paid: row.isPaid, amount: row.rentDue),
+                      paid: row.isPaid, amount: row.totalDue),
               trailingIcon: (s.phone == null || s.phone!.isEmpty)
                   ? null
                   : Icons.sms_outlined,
@@ -161,6 +161,15 @@ class UnitDetailSheet extends StatelessWidget {
   }
 }
 
+/// "Rs 15,000 rent + Rs 800 charges − Rs 500 deducted" — the month's due
+/// spelled out, with zero parts omitted. Shown wherever the due differs from
+/// the headline rent so the math stays transparent.
+String _dueBreakdown(UnitRow row) => [
+      '${Money.format(row.unit.monthlyRent)} rent',
+      if (row.charges > 0) '+ ${Money.format(row.charges)} charges',
+      if (row.deduction > 0) '− ${Money.format(row.deduction)} deducted',
+    ].join(' ');
+
 class _BigToggleButton extends StatelessWidget {
   final UnitRow row;
   final BsMonth month;
@@ -173,9 +182,10 @@ class _BigToggleButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final ledger = context.read<LedgerProvider>();
     final mode = context.watch<SettingsProvider>().calendar;
-    // Everything here is against the month's *due* — rent less any deduction
-    // for goods taken from the shop — not the headline rent.
-    final rent = row.rentDue;
+    // Everything here is against the month's *due* — rent plus utility
+    // charges, less any deduction for goods taken from the shop — not the
+    // headline rent.
+    final due = row.totalDue;
     final paidAmount = row.paidAmount;
 
     switch (row.status) {
@@ -218,7 +228,7 @@ class _BigToggleButton extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('${Money.format(paidAmount)} of ${Money.format(rent)} paid',
+                  Text('${Money.format(paidAmount)} of ${Money.format(due)} paid',
                       style: const TextStyle(
                           color: Colors.white70, fontSize: 12)),
                   const SizedBox(height: 2),
@@ -254,9 +264,9 @@ class _BigToggleButton extends StatelessWidget {
         );
 
       case PayStatus.pending:
-        if (rent == 0) {
-          // Rent 0 and nothing deducted: there is nothing to collect, and a
-          // Collect tap would only write an empty payment row.
+        if (due == 0) {
+          // Rent 0, no charges and nothing deducted: there is nothing to
+          // collect, and a Collect tap would only write an empty payment row.
           return _BaseBigButton(
             onTap: () {},
             bg: Brand.glassBg,
@@ -285,18 +295,16 @@ class _BigToggleButton extends StatelessWidget {
                           size: 17, color: Colors.white),
                       const SizedBox(width: 7),
                       Text(
-                          'Collect ${Money.format(rent)} for ${month.monthNameIn(mode)}',
+                          'Collect ${Money.format(due)} for ${month.monthNameIn(mode)}',
                           style: const TextStyle(
                               color: Colors.white,
                               fontSize: 14.5,
                               fontWeight: FontWeight.w700)),
                     ],
                   ),
-                  if (row.deduction > 0) ...[
+                  if (row.charges > 0 || row.deduction > 0) ...[
                     const SizedBox(height: 2),
-                    Text(
-                        '${Money.format(unit.monthlyRent)} rent − '
-                        '${Money.format(row.deduction)} deducted',
+                    Text(_dueBreakdown(row),
                         style: const TextStyle(
                             color: Colors.white70, fontSize: 12)),
                   ],
@@ -315,7 +323,8 @@ class _BigToggleButton extends StatelessWidget {
   }
 
   /// Prompts for the total amount received this month and records it. An empty
-  /// or zero value clears the month (undo); anything >= rent settles it fully.
+  /// or zero value clears the month (undo); anything >= the due settles it
+  /// fully.
   Future<void> _recordPartial(
       BuildContext context, LedgerProvider ledger) async {
     final ctrl = TextEditingController(
@@ -328,10 +337,9 @@ class _BigToggleButton extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              row.deduction > 0
-                  ? 'Due is ${Money.format(row.rentDue)} '
-                      '(${Money.format(unit.monthlyRent)} rent − '
-                      '${Money.format(row.deduction)} deducted). Enter the '
+              row.charges > 0 || row.deduction > 0
+                  ? 'Due is ${Money.format(row.totalDue)} '
+                      '(${_dueBreakdown(row)}). Enter the '
                       'total received for ${month.monthName} ${month.year}.'
                   : 'Rent is ${Money.format(unit.monthlyRent)}. Enter the '
                       'total received for ${month.monthName} ${month.year}.',

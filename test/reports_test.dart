@@ -112,12 +112,46 @@ void main() {
 
       final p = await repo.periodSummary(2082, 1, 12);
       expect(p.expected, 40000); // 4 months × 10000, not 12
-      // m1–m8 owe nothing → count as settled slots; m9–m12 are unpaid.
-      expect(p.paidSlots, 8);
+      // m1–m8 are not slots at all — nothing was owed, so they count in
+      // neither the paid tally nor the denominator ("Paid 0/4", not "8/12").
+      expect(p.paidSlots, 0);
+      expect(p.totalSlots, 4);
       expect(p.outstanding.single.amountOwed, 40000);
       expect(p.outstanding.single.monthsUnpaid, 4);
       expect(p.months[0].expected, 0); // Baishakh, pre-start
       expect(p.months[8].expected, 10000); // Poush, first month due
+    });
+
+    test('income components: expected = rent + charges − deductions', () async {
+      final a = await makeUnit('A-01', 10000);
+      await repo.setCharges(a.id, 2082, 1, electricity: 500, water: 300);
+      await repo.setDeduction(a.id, 2082, 2, amount: 1500);
+
+      final p = await repo.periodSummary(2082, 1, 3);
+      expect(p.rentExpected, 30000);
+      expect(p.chargesExpected, 800);
+      expect(p.deductions, 1500);
+      expect(p.expected, 30000 + 800 - 1500);
+      expect(p.expected, p.rentExpected + p.chargesExpected - p.deductions);
+    });
+
+    test('an over-rent deduction is capped so the components still add up',
+        () async {
+      final a = await makeUnit('A-01', 10000);
+      await repo.setDeduction(a.id, 2082, 1, amount: 25000); // > rent
+
+      final p = await repo.periodSummary(2082, 1, 2);
+      expect(p.months[0].expected, 0); // floored, not negative
+      expect(p.deductions, 10000); // capped at that month's rent + charges
+      expect(p.expected, p.rentExpected + p.chargesExpected - p.deductions);
+    });
+
+    test('a rent-only ledger reports zero charges and deductions', () async {
+      await makeUnit('A-01', 10000);
+      final p = await repo.periodSummary(2082, 1, 3);
+      expect(p.rentExpected, 30000);
+      expect(p.chargesExpected, 0);
+      expect(p.deductions, 0);
     });
 
     test('month summary skips units that had not started by that month',

@@ -114,15 +114,15 @@ class LedgerProvider extends ChangeNotifier {
   // ---- mutations (each refreshes affected derived state) ------------------
 
   /// Records this month's payment. With no [amount], settles the month at the
-  /// due the UI is showing (`rowFor(unit).rentDue` — rent less deduction), so
-  /// what the button says and what gets recorded cannot diverge.
+  /// due the UI is showing (`rowFor(unit).totalDue` — rent + charges less
+  /// deduction), so what the button says and what gets recorded cannot diverge.
   Future<void> markPaid(Unit unit,
       {int? amount,
       DateTime? paidOn,
       PayMethod method = PayMethod.cash,
       String? note}) async {
     await repo.markPaid(unit, _month.year, _month.month,
-        amount: amount ?? rowFor(unit.id)?.rentDue,
+        amount: amount ?? rowFor(unit.id)?.totalDue,
         paidOn: paidOn,
         method: method,
         note: note);
@@ -162,7 +162,7 @@ class LedgerProvider extends ChangeNotifier {
       repo.chargesFor(unitId, _month.year, _month.month);
 
   /// Record this unit's electricity/water/service charges for the selected
-  /// month, then refresh.
+  /// month, then refresh — they add to the month's due everywhere.
   Future<void> setCharges(
     int unitId, {
     int electricity = 0,

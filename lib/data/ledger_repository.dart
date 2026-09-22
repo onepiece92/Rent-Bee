@@ -169,16 +169,19 @@ class LedgerRepository {
           .wait;
 
   /// Build sorted [UnitRow]s from already-loaded units + that month's payments
-  /// and charges rows (the latter carry each unit's rent deduction).
+  /// and charges rows (the latter carry each unit's utility charges and rent
+  /// deduction, both of which feed the month's due).
   List<UnitRow> _rowsFrom(
       List<Unit> units, List<Payment> payments, List<Charge> charges) {
     final byUnit = {for (final p in payments) p.unitId: p};
     final deductionByUnit = _deductionByUnit(charges);
+    final chargesByUnit = _chargesByUnit(charges);
     final rows = [
       for (final s in units)
         UnitRow(
           unit: s,
           payment: byUnit[s.id],
+          charges: chargesByUnit[s.id] ?? 0,
           deduction: deductionByUnit[s.id] ?? 0,
         ),
     ];
@@ -210,9 +213,10 @@ class LedgerRepository {
       RentSchedule(unit, 0).startedBy(year, month);
 
   /// Mark paid: upsert a payment row. amount defaults to the month's due — the
-  /// unit's current monthly_rent less any rent deduction (captured per
-  /// record), paid_on = today, method = cash. A non-positive amount clears the
-  /// month instead (see [undo]), matching the partial dialog's "blank = undo".
+  /// unit's current monthly_rent plus the month's utility charges, less any
+  /// rent deduction (captured per record), paid_on = today, method = cash. A
+  /// non-positive amount clears the month instead (see [undo]), matching the
+  /// partial dialog's "blank = undo".
   Future<void> markPaid(
     Unit unit,
     int year,
@@ -223,10 +227,12 @@ class LedgerRepository {
     String? note,
   }) async {
     // "Settle in full" means what's actually owed this month, not the headline
-    // rent, when part of it was taken as goods from the shop (see netDue).
+    // rent: utility charges come on top, goods taken from the shop come off
+    // (see netDue).
+    final chargeRow = await chargesFor(unit.id, year, month);
     final due = amount ??
-        netDue(unit.monthlyRent,
-            (await chargesFor(unit.id, year, month))?.deduction ?? 0);
+        netDue(unit.monthlyRent, chargeRow?.deduction ?? 0,
+            charges: chargeRow == null ? 0 : _chargesTotal(chargeRow));
     // Nothing to record — rent 0, fully deducted, or an explicit blank: clear
     // the month rather than store an empty payment row that would sync to
     // every device and still read as pending.
@@ -322,13 +328,24 @@ class LedgerRepository {
         .get();
   }
 
+  /// The row's utility/service charges total (electricity + water + service).
+  static int _chargesTotal(Charge c) => c.electricity + c.water + c.service;
+
   /// unitId → that month's rent deduction, from one month's charges rows.
   static Map<int, int> _deductionByUnit(List<Charge> charges) =>
       {for (final c in charges) c.unitId: c.deduction};
 
+  /// unitId → that month's charges total, from one month's charges rows.
+  static Map<int, int> _chargesByUnit(List<Charge> charges) =>
+      {for (final c in charges) c.unitId: _chargesTotal(c)};
+
   /// (unitId, month) → rent deduction, from charges rows within one BS year.
   static Map<(int, int), int> _deductionByUnitMonth(List<Charge> charges) =>
       {for (final c in charges) (c.unitId, c.month): c.deduction};
+
+  /// (unitId, month) → charges total, from charges rows within one BS year.
+  static Map<(int, int), int> _chargesByUnitMonth(List<Charge> charges) =>
+      {for (final c in charges) (c.unitId, c.month): _chargesTotal(c)};
 
   /// Insert-or-update this month's electricity/water/service charges for a unit
   /// (negatives floored at 0). The row's rent deduction is left as it was —
@@ -490,6 +507,16 @@ class LedgerRepository {
     );
   }
 
+  /// Vacated units still holding a tenant's deposit (the `dueBack` side of
+  /// [depositLiability]), sorted by code — the refunds that are overdue.
+  Future<List<Unit>> unitsOwingDepositRefund() async {
+    final units = await allUnits();
+    return [
+      for (final u in units)
+        if (!u.isActive && !u.depositRefunded && u.depositAmount > 0) u
+    ]..sort((a, b) => a.code.compareTo(b.code));
+  }
+
   // ---- Reporting ---------------------------------------------------------
 
   Future<MonthSummary> summary(int year, int month) async {
@@ -500,18 +527,21 @@ class LedgerRepository {
   /// Dashboard totals from already-loaded units + that month's payments and
   /// charges rows. `expected` counts active units that had **started** by
   /// ([year], [month]) — a tenant who moved in later owes nothing for earlier
-  /// months — each priced net of that month's rent deduction. `collected`
-  /// sums every payment recorded for the month, including from since-vacated
-  /// units, so money actually received is never understated.
+  /// months — each priced at rent + that month's utility charges, net of its
+  /// rent deduction. `collected` sums every payment recorded for the month,
+  /// including from since-vacated units, so money actually received is never
+  /// understated.
   MonthSummary _summaryFrom(List<Unit> units, List<Payment> payments,
       List<Charge> charges, int year, int month) {
     final active = units
         .where((s) => s.isActive && _startedBy(s, year, month))
         .toList();
     final deductionById = _deductionByUnit(charges);
+    final chargesById = _chargesByUnit(charges);
     final dueById = {
       for (final s in active)
-        s.id: netDue(s.monthlyRent, deductionById[s.id] ?? 0),
+        s.id: netDue(s.monthlyRent, deductionById[s.id] ?? 0,
+            charges: chargesById[s.id] ?? 0),
     };
 
     // Amount recorded per active unit (one row per month; fold defensively).
@@ -568,14 +598,21 @@ class LedgerRepository {
       chargesForRange(year, startMonth, endMonth),
     ).wait;
     final active = units.where((s) => s.isActive).toList();
-    // Rent deductions per (unit, month) — every month is priced net of them.
+    // Adjustments per (unit, month) — every month is priced at rent + its
+    // utility charges, net of its rent deduction.
     final deductionByUnitMonth = _deductionByUnitMonth(charges);
+    final chargesByUnitMonth = _chargesByUnitMonth(charges);
     // One schedule per unit: its BS anchors convert once for all the months.
     final schedules = {for (final s in active) s.id: RentSchedule(s, percent)};
-    int dueFor(Unit s, int m) => netDue(schedules[s.id]!.rentFor(year, m),
-        deductionByUnitMonth[(s.id, m)] ?? 0);
-
-    final span = endMonth - startMonth + 1;
+    int dueFor(Unit s, int m) {
+      final schedule = schedules[s.id]!;
+      // Adjustments on a month before the tenant moved in must not create a
+      // phantom due — nothing was owed then (mirrors history()).
+      if (!schedule.startedBy(year, m)) return 0;
+      return netDue(schedule.rentFor(year, m),
+          deductionByUnitMonth[(s.id, m)] ?? 0,
+          charges: chargesByUnitMonth[(s.id, m)] ?? 0);
+    }
 
     // Amount paid per (unit, month) — partial payments included.
     final paidByUnitMonth = <int, Map<int, int>>{};
@@ -586,11 +623,27 @@ class LedgerRepository {
 
     // Per-month breakdown — expected uses the rent in effect THAT month for
     // each unit, so a later escalation can't inflate a historical month.
+    // Alongside it, split expected into its income components: rent, utility
+    // charges, and deductions capped at each month's rent + charges (the same
+    // floor netDue applies), so rent + charges − deductions == expected.
     final buckets = <MonthBucket>[];
     var totalExpected = 0;
+    var rentExpected = 0, chargesExpected = 0, deductionsTotal = 0;
     for (var m = startMonth; m <= endMonth; m++) {
-      final monthExpected =
-          active.fold<int>(0, (sum, s) => sum + dueFor(s, m));
+      var monthExpected = 0;
+      for (final s in active) {
+        final schedule = schedules[s.id]!;
+        if (!schedule.startedBy(year, m)) continue;
+        final rent = schedule.rentFor(year, m);
+        final monthCharges = chargesByUnitMonth[(s.id, m)] ?? 0;
+        final deduction = deductionByUnitMonth[(s.id, m)] ?? 0;
+        final capped =
+            deduction > rent + monthCharges ? rent + monthCharges : deduction;
+        rentExpected += rent;
+        chargesExpected += monthCharges;
+        deductionsTotal += capped < 0 ? 0 : capped;
+        monthExpected += dueFor(s, m);
+      }
       final collected = payments
           .where((p) => p.month == m)
           .fold<int>(0, (sum, p) => sum + p.amount);
@@ -606,14 +659,20 @@ class LedgerRepository {
     // Outstanding per unit + count of fully-settled (unit, month) slots.
     // Owed is the true shortfall (rent-in-effect − paid) summed over the
     // period, so a month paid in full at the old rate isn't re-charged after a
-    // raise, and a partial month contributes only its remainder.
+    // raise, and a partial month contributes only its remainder. Months before
+    // a tenant moved in are not slots at all — they count in neither the
+    // paid tally nor the denominator, so "Paid n/m" reflects months actually
+    // owed, not the calendar span.
     final outstanding = <PeriodDebt>[];
     var paidSlots = 0;
+    var startedSlots = 0;
     for (final s in active) {
       final byMonth = paidByUnitMonth[s.id] ?? const <int, int>{};
       var owed = 0;
       var monthsUnpaid = 0;
       for (var m = startMonth; m <= endMonth; m++) {
+        if (!schedules[s.id]!.startedBy(year, m)) continue;
+        startedSlots++;
         final due = dueFor(s, m);
         final paid = byMonth[m] ?? 0;
         if (paid >= due) {
@@ -639,8 +698,11 @@ class LedgerRepository {
     return PeriodSummary(
       expected: totalExpected,
       collected: payments.fold<int>(0, (sum, p) => sum + p.amount),
+      rentExpected: rentExpected,
+      chargesExpected: chargesExpected,
+      deductions: deductionsTotal,
       paidSlots: paidSlots,
-      totalSlots: active.length * span,
+      totalSlots: startedSlots,
       months: buckets,
       outstanding: outstanding,
     );
@@ -648,8 +710,8 @@ class LedgerRepository {
 
   /// Recent paid/partial/unpaid per month for a unit, newest first. Each entry
   /// carries the amount collected plus the rent **in effect that month** (see
-  /// [rentInEffect], using the [percent] escalation rate), net of that month's
-  /// rent deduction, as the expected — so
+  /// [rentInEffect], using the [percent] escalation rate) plus that month's
+  /// utility charges, net of its rent deduction, as the expected — so
   /// a month fully paid at the pre-raise rate still reads as paid after an
   /// anniversary raise lands, instead of flipping to partial.
   Future<List<HistoryEntry>> history(int unitId, BsMonth from,
@@ -682,22 +744,26 @@ class LedgerRepository {
     final deductionByMonth = {
       for (final c in charges) (c.year, c.month): c.deduction
     };
+    final chargesByMonth = {
+      for (final c in charges) (c.year, c.month): _chargesTotal(c)
+    };
 
     final schedule = RentSchedule(unit, percent);
     final entries = <HistoryEntry>[];
     var cursor = from;
     for (var i = 0; i < months; i++) {
       final key = (cursor.year, cursor.month);
-      // A deduction recorded against a month before the tenant moved in must
-      // not read as "covered by deduction" — nothing was due, nothing settled.
-      final deduction = schedule.startedBy(cursor.year, cursor.month)
-          ? (deductionByMonth[key] ?? 0)
-          : 0;
+      // Adjustments recorded against a month before the tenant moved in must
+      // not read as due or "covered by deduction" — nothing was owed then.
+      final started = schedule.startedBy(cursor.year, cursor.month);
+      final deduction = started ? (deductionByMonth[key] ?? 0) : 0;
+      final monthCharges = started ? (chargesByMonth[key] ?? 0) : 0;
       entries.add(HistoryEntry(
         year: cursor.year,
         month: cursor.month,
         amount: amountByMonth[key] ?? 0,
-        expected: netDue(schedule.rentFor(cursor.year, cursor.month), deduction),
+        expected: netDue(schedule.rentFor(cursor.year, cursor.month), deduction,
+            charges: monthCharges),
         deduction: deduction,
       ));
       cursor = cursor.previous();
@@ -723,21 +789,24 @@ class LedgerRepository {
     final units = [...allU]..sort((a, b) => a.code.compareTo(b.code));
     final byKey = {for (final p in payments) (p.unitId, p.month): p};
     // `rent` stays the unit's headline rent (importCsv reads it back as
-    // monthly_rent); the month's deduction travels in its own column so a
-    // deduction-settled month still round-trips as paid.
-    final deductionByKey = _deductionByUnitMonth(charges);
+    // monthly_rent); the month's deduction and utility charges travel in their
+    // own columns so a month settled with either still round-trips as paid.
+    final chargeByKey = {for (final c in charges) (c.unitId, c.month): c};
     final buf = StringBuffer()
-      ..writeln(
-          'month,year,code,tenant,rent,status,paid_on,method,amount,deduction');
+      ..writeln('month,year,code,tenant,rent,status,paid_on,method,amount,'
+          'deduction,electricity,water,service');
     for (var m = startMonth; m <= endMonth; m++) {
       final monthLabel = BsCalendar.label(m);
       for (final s in units) {
+        final charge = chargeByKey[(s.id, m)];
         final r = UnitRow(
           unit: s,
           payment: byKey[(s.id, m)],
-          deduction: deductionByKey[(s.id, m)] ?? 0,
+          charges: charge == null ? 0 : _chargesTotal(charge),
+          deduction: charge?.deduction ?? 0,
         );
-        buf.writeln(_csvRow(r, monthLabel: monthLabel, year: year));
+        buf.writeln(
+            _csvRow(r, charge: charge, monthLabel: monthLabel, year: year));
       }
     }
     return buf.toString();
@@ -746,8 +815,10 @@ class LedgerRepository {
   /// One CSV data row for a unit's month. [monthLabel]/[year], when given,
   /// prepend the leading `month`,`year` columns used by range exports; omit them
   /// for single-month exports. Column order matches the headers the callers write.
-  static String _csvRow(UnitRow r, {String? monthLabel, int? year}) {
+  static String _csvRow(UnitRow r,
+      {Charge? charge, String? monthLabel, int? year}) {
     final p = r.payment;
+    String opt(int? v) => (v == null || v == 0) ? '' : '$v';
     return [
       if (monthLabel != null) _csv(monthLabel),
       if (year != null) '$year',
@@ -758,7 +829,10 @@ class LedgerRepository {
       p?.paidOn?.toIso8601String().split('T').first ?? '',
       p?.method.name ?? '',
       p?.amount.toString() ?? '',
-      r.deduction == 0 ? '' : '${r.deduction}',
+      opt(r.deduction),
+      opt(charge?.electricity),
+      opt(charge?.water),
+      opt(charge?.service),
     ].join(',');
   }
 
@@ -783,7 +857,8 @@ class LedgerRepository {
   ///   • paid/partial rows become payments, upserted by (unit, month).
   ///
   /// Recognised columns (case-insensitive header, order-independent): code*,
-  /// tenant, rent, month, status, paid_on, method, amount, deduction, year.
+  /// tenant, rent, month, status, paid_on, method, amount, deduction,
+  /// electricity, water, service, year.
   /// The BS year comes from a `year` column if present, otherwise
   /// [fallbackYear] (single-year files import into the selected year).
   /// Existing data not referenced by the file is left untouched. Returns the
@@ -810,7 +885,10 @@ class LedgerRepository {
         iPaidOn = col('paid_on'),
         iMethod = col('method'),
         iAmount = col('amount'),
-        iDeduction = col('deduction');
+        iDeduction = col('deduction'),
+        iElectricity = col('electricity'),
+        iWater = col('water'),
+        iService = col('service');
     if (iCode < 0) {
       throw const FormatException('CSV is missing a "code" column.');
     }
@@ -863,6 +941,16 @@ class LedgerRepository {
       if (monthNum != null && deduction != null && deduction > 0) {
         await setDeduction(unitId, _year(cell(iYear), fallbackYear), monthNum,
             amount: deduction);
+      }
+
+      // The month's utility charges likewise feed the due — without them a
+      // paid month that included charges would import as overpaid/ambiguous.
+      final electricity = _parseInt(cell(iElectricity)) ?? 0;
+      final water = _parseInt(cell(iWater)) ?? 0;
+      final service = _parseInt(cell(iService)) ?? 0;
+      if (monthNum != null && (electricity > 0 || water > 0 || service > 0)) {
+        await setCharges(unitId, _year(cell(iYear), fallbackYear), monthNum,
+            electricity: electricity, water: water, service: service);
       }
 
       // Upsert the payment for settled/partial rows carrying an amount.

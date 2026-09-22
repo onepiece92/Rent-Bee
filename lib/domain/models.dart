@@ -3,13 +3,17 @@ import '../data/database.dart';
 /// Payment state of a unit for a given month.
 enum PayStatus { pending, partial, paid }
 
-/// Rent actually due for a month once the landlord's [deduction] (goods or
-/// services taken from the tenant's shop against rent) is taken off [rent].
-/// Never negative: a deduction larger than the rent reads as 0 due, and a
-/// negative rent (possible via a restored backup or cloud doc, which don't
-/// floor it) is treated as 0 rather than tripping `clamp`'s bounds check.
-int netDue(int rent, int deduction) {
-  final due = rent - (deduction < 0 ? 0 : deduction);
+/// Total actually due for a month: [rent] plus the month's utility/service
+/// [charges] (electricity + water + service), less the landlord's [deduction]
+/// (goods or services taken from the tenant's shop against rent).
+/// Never negative: a deduction larger than rent + charges reads as 0 due, and
+/// a negative rent or charge (possible via a restored backup or cloud doc,
+/// which don't floor them) is treated as 0 rather than tripping `clamp`'s
+/// bounds check.
+int netDue(int rent, int deduction, {int charges = 0}) {
+  final due = rent +
+      (charges < 0 ? 0 : charges) -
+      (deduction < 0 ? 0 : deduction);
   return due < 0 ? 0 : due;
 }
 
@@ -26,23 +30,28 @@ class UnitRow {
   final Unit unit;
   final Payment? payment; // null = nothing recorded this month
 
+  /// This month's utility/service charges total (electricity + water +
+  /// service, 0 = none). See [netDue].
+  final int charges;
+
   /// Landlord's deduction against this month's rent (0 = none). See [netDue].
   final int deduction;
 
-  const UnitRow({required this.unit, this.payment, this.deduction = 0});
+  const UnitRow(
+      {required this.unit, this.payment, this.charges = 0, this.deduction = 0});
 
   /// Amount recorded for this month so far (0 if no payment row).
   int get paidAmount => payment?.amount ?? 0;
 
-  /// Cash due this month: the unit's rent less the deduction, floored at 0.
-  int get rentDue => netDue(unit.monthlyRent, deduction);
+  /// Cash due this month: rent + charges − deduction, floored at 0.
+  int get totalDue => netDue(unit.monthlyRent, deduction, charges: charges);
 
-  /// Remaining due against this month's [rentDue], floored at 0.
-  int get remaining => (rentDue - paidAmount).clamp(0, rentDue);
+  /// Remaining due against this month's [totalDue], floored at 0.
+  int get remaining => (totalDue - paidAmount).clamp(0, totalDue);
 
   /// pending (nothing/zero) · partial (some, < due) · paid — see [settles].
   PayStatus get status {
-    if (settles(paid: paidAmount, due: rentDue, deduction: deduction)) {
+    if (settles(paid: paidAmount, due: totalDue, deduction: deduction)) {
       return PayStatus.paid;
     }
     return paidAmount <= 0 ? PayStatus.pending : PayStatus.partial;
@@ -55,7 +64,7 @@ class UnitRow {
 
 /// Dashboard totals for a selected (year, month).
 class MonthSummary {
-  final int expected; // sum of monthly_rent over active units started by then
+  final int expected; // Σ (rent + charges − deduction) over active units started by then
   final int collected; // sum of ALL payments.amount for the month
   final int paidCount; // active units settled in full this month
   final int partialCount; // active units with a partial payment this month
@@ -134,19 +143,31 @@ class PeriodDebt {
 /// type behind month/quarter/year reports). For a single month it carries
 /// exactly one [months] bucket and is equivalent to a [MonthSummary].
 ///
-/// `expected` is `months × current active rent` — rent changes over time are
-/// not back-dated, matching the existing month [MonthSummary] definition.
+/// `expected` prices each month at the rent in effect then plus its utility
+/// charges, net of its deduction — rent changes over time are not back-dated,
+/// matching the month [MonthSummary] definition.
+///
+/// [rentExpected], [chargesExpected] and [deductions] split `expected` into
+/// its income components. Each month's deduction is capped at that month's
+/// rent + charges (mirroring `netDue`'s floor), so the identity
+/// `expected == rentExpected + chargesExpected − deductions` holds exactly.
 class PeriodSummary {
   final int expected; // sum of per-month expected across the period
   final int collected; // sum of ALL payments in the period (incl. vacated)
+  final int rentExpected; // the rent share of expected
+  final int chargesExpected; // the utility-charges share of expected
+  final int deductions; // total deducted (capped per month, see above)
   final int paidSlots; // (unit, month) pairs paid
-  final int totalSlots; // activeCount × month span
+  final int totalSlots; // (unit, month) pairs actually owed (post-start only)
   final List<MonthBucket> months; // per-month breakdown, in order
   final List<PeriodDebt> outstanding; // units still owing, largest first
 
   const PeriodSummary({
     required this.expected,
     required this.collected,
+    this.rentExpected = 0,
+    this.chargesExpected = 0,
+    this.deductions = 0,
     required this.paidSlots,
     required this.totalSlots,
     required this.months,
@@ -194,8 +215,8 @@ class HistoryEntry {
   /// Amount collected for this month (0 if nothing recorded).
   final int amount;
 
-  /// Rent expected for this month — lets the UI tell partial from full.
-  /// Already net of any [deduction] (see [netDue]).
+  /// Total expected for this month — lets the UI tell partial from full.
+  /// Already rent + charges, net of any [deduction] (see [netDue]).
   final int expected;
 
   /// Landlord's deduction against this month's rent (0 = none). Only consulted
