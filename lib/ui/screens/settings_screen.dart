@@ -16,6 +16,7 @@ import '../widgets/glass.dart';
 import '../widgets/sync_badge.dart';
 import '../widgets/glass_dialog.dart';
 import '../widgets/toast.dart';
+import '../widgets/typed_confirm_dialog.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -459,20 +460,24 @@ class SettingsScreen extends StatelessWidget {
     showToastOn(overlay, '3 years of demo data generated');
   }
 
+  /// The one irreversible, account-wide action: a tap isn't enough, the owner
+  /// has to type ERASE before the button enables.
   Future<void> _eraseAll(BuildContext context, {required bool synced}) async {
     final ledger = context.read<LedgerProvider>();
     final overlay = Overlay.of(context, rootOverlay: true);
-    final ok = await _confirm(
+    final ok = await showGlassDialog<bool>(
       context,
-      title: 'Erase all data?',
-      message: synced
-          ? 'This permanently deletes every unit and all payment history from '
-              'this device and every other device signed in to your account. '
-              'This cannot be undone.'
-          : 'This permanently deletes every unit and all payment history. '
-              'This cannot be undone.',
-      confirmLabel: 'Erase',
-      destructive: true,
+      (_) => TypedConfirmDialog(
+        title: 'Erase all data?',
+        message: synced
+            ? 'This permanently deletes every unit and all payment history '
+                'from this device and every other device signed in to your '
+                'account. This cannot be undone.'
+            : 'This permanently deletes every unit and all payment history. '
+                'This cannot be undone.',
+        word: 'ERASE',
+        confirmLabel: 'Erase',
+      ),
     );
     if (ok != true) return;
     await ledger.eraseAllData();
