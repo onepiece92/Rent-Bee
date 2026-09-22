@@ -18,171 +18,230 @@ import '../widgets/glass_dialog.dart';
 import '../widgets/toast.dart';
 import '../widgets/typed_confirm_dialog.dart';
 
+/// Hairline inset for rows led by a 28 pt [IconTile]: gutter + tile + gap, so
+/// the line starts under the title like iOS Settings.
+const double _rowInset = Sys.gutter + 28 + 12;
+
+/// Space between one section's card and the next section's title.
+const double _sectionGap = 16;
+
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final ledger = context.watch<LedgerProvider>();
     final settings = context.watch<SettingsProvider>();
     final auth = context.watch<AuthProvider>();
+    final rate = settings.annualRaisePercent;
 
     return SafeArea(
       bottom: false,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(18, 16, 18, 120),
+        padding: const EdgeInsets.fromLTRB(Sys.gutter, 16, Sys.gutter, 120),
         children: [
-          Text('Settings',
-              style: display(fontSize: 22, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 18),
-          const _SectionLabel('Calendar'),
-          GlassPanel(
-            child: _CalendarToggle(
-              mode: settings.calendar,
-              onChanged: settings.setCalendar,
+          Text('Settings', style: Type.largeTitle.colored(sys.label)),
+          const SizedBox(height: 16),
+          const SectionTitle('Calendar'),
+          GroupedCard(
+            child: _ChoiceBody(
+              label: 'Display dates in',
+              child: SegmentedControl<CalendarMode>(
+                values: CalendarMode.values,
+                selected: settings.calendar,
+                label: (m) => m == CalendarMode.bs
+                    ? 'Bikram Sambat (BS)'
+                    : 'Gregorian (AD)',
+                onChanged: settings.setCalendar,
+              ),
             ),
           ),
-          const SizedBox(height: 20),
-          const _SectionLabel('Currency'),
-          GlassPanel(
-            child: _CurrencyToggle(
-              currency: settings.currency,
-              onChanged: settings.setCurrency,
+          const SizedBox(height: _sectionGap),
+          const SectionTitle('Currency'),
+          GroupedCard(
+            child: _ChoiceBody(
+              label: 'Track rent in',
+              child: SegmentedControl<Currency>(
+                values: Currency.values,
+                selected: settings.currency,
+                label: (c) => c == Currency.npr
+                    ? 'Nepali Rupee (Rs)'
+                    : r'US Dollar ($)',
+                onChanged: settings.setCurrency,
+              ),
             ),
           ),
-          const SizedBox(height: 20),
-          const _SectionLabel('Security'),
-          GlassPanel(
+          const SizedBox(height: _sectionGap),
+          const SectionTitle('Appearance'),
+          GroupedCard(
+            child: SegmentedControl<ThemeMode>(
+              values: const [ThemeMode.system, ThemeMode.light, ThemeMode.dark],
+              selected: settings.appearance,
+              label: (m) => switch (m) {
+                ThemeMode.system => 'Automatic',
+                ThemeMode.light => 'Light',
+                ThemeMode.dark => 'Dark',
+              },
+              onChanged: settings.setAppearance,
+            ),
+          ),
+          // Section footer, like iOS: explains the first segment.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(Sys.gutter, 8, Sys.gutter, 0),
+            child: Text('Automatic follows the system setting.',
+                style: Type.footnote.colored(sys.secondaryLabel)),
+          ),
+          const SizedBox(height: _sectionGap),
+          const SectionTitle('Security'),
+          GroupedCard(
             padding: EdgeInsets.zero,
             child: Column(
               children: [
-                _SettingTile(
-                  icon: Icons.password_rounded,
+                ListRow(
+                  leading: IconTile(
+                      icon: Icons.password_rounded, color: sys.secondaryLabel),
                   title: 'Change PIN',
                   subtitle: 'Update your unlock code',
+                  chevron: true,
                   onTap: () => _changePin(context),
                 ),
-                const _Divider(),
-                _SettingTile(
-                  icon: Icons.lock_outline,
+                const Hairline(inset: _rowInset),
+                ListRow(
+                  leading: IconTile(
+                      icon: Icons.lock_outline, color: sys.secondaryLabel),
                   title: 'Lock now',
                   subtitle: 'Return to the PIN screen',
+                  chevron: true,
                   onTap: () => context.read<AuthProvider>().lock(),
                 ),
-                const _Divider(),
-                _SettingTile(
-                  icon: Icons.logout_rounded,
+                const Hairline(inset: _rowInset),
+                ListRow(
+                  leading: IconTile(icon: Icons.logout_rounded, color: sys.red),
                   title: 'Sign out',
                   subtitle: auth.phone == null
                       ? 'Remove this device and re-verify your phone'
                       : 'Signed in as ${auth.phone} · tap to re-verify',
-                  iconColor: Colors.redAccent,
+                  destructive: true,
+                  chevron: true,
                   onTap: () => _signOut(context),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 20),
-          const _SectionLabel('Rent'),
-          GlassPanel(
+          const SizedBox(height: _sectionGap),
+          const SectionTitle('Rent'),
+          GroupedCard(
             padding: EdgeInsets.zero,
-            child: _SettingTile(
-              icon: Icons.trending_up_rounded,
-              title: settings.annualRaisePercent == 0
-                  ? 'Annual Lease Escalation Rate'
-                  : 'Annual Lease Escalation Rate · ${fmtPercent(settings.annualRaisePercent)}%',
-              subtitle: settings.annualRaisePercent == 0
+            child: ListRow(
+              leading:
+                  IconTile(icon: Icons.trending_up_rounded, color: sys.orange),
+              title: 'Annual Lease Escalation Rate',
+              subtitle: rate == 0
                   ? 'Off — tap to auto-raise rent every year'
                   : 'Applied automatically on each unit\'s anniversary month',
+              trailing: Text(rate == 0 ? 'Off' : '${fmtPercent(rate)}%',
+                  style: Type.subhead.colored(sys.secondaryLabel).tabular),
+              chevron: true,
               onTap: () => _editRaisePercent(context),
             ),
           ),
-          const SizedBox(height: 20),
-          const _SectionLabel('Backup'),
-          GlassPanel(
+          const SizedBox(height: _sectionGap),
+          const SectionTitle('Backup'),
+          GroupedCard(
             padding: EdgeInsets.zero,
             child: Column(
               children: [
                 const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 14, 16, 14),
+                  padding: EdgeInsets.fromLTRB(Sys.gutter, 14, Sys.gutter, 14),
                   child: SyncStatusLine(),
                 ),
-                const _Divider(),
+                const Hairline(inset: _rowInset),
                 if (ledger.cloudSyncActive) ...[
-                  _SettingTile(
-                    icon: Icons.cloud_upload_outlined,
+                  ListRow(
+                    leading: IconTile(
+                        icon: Icons.cloud_upload_outlined, color: sys.tint),
                     title: 'Back up to cloud now',
                     subtitle: 'Force a full re-sync of everything',
                     onTap: () => _backupToCloud(context),
                   ),
-                  const _Divider(),
+                  const Hairline(inset: _rowInset),
                 ],
-                _SettingTile(
-                  icon: Icons.cloud_download_outlined,
+                ListRow(
+                  leading: IconTile(icon: Icons.save_alt, color: sys.green),
                   title: 'Back up to file',
                   subtitle: 'Full snapshot — units, payments, charges, deposits',
+                  chevron: true,
                   onTap: () => _backup(context),
                 ),
-                const _Divider(),
-                _SettingTile(
-                  icon: Icons.restore_rounded,
+                const Hairline(inset: _rowInset),
+                ListRow(
+                  leading: IconTile(icon: Icons.restore_rounded, color: sys.red),
                   title: 'Restore from backup',
                   subtitle: 'Replace all data with a backup file',
-                  iconColor: Colors.redAccent,
+                  destructive: true,
+                  chevron: true,
                   onTap: () => _restoreBackup(context),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 20),
-          const _SectionLabel('Data'),
-          GlassPanel(
+          const SizedBox(height: _sectionGap),
+          const SectionTitle('Data'),
+          GroupedCard(
             padding: EdgeInsets.zero,
             child: Column(
               children: [
-                _SettingTile(
-                  icon: Icons.file_download_outlined,
+                ListRow(
+                  leading: IconTile(
+                      icon: Icons.file_download_outlined, color: sys.green),
                   title: 'Import CSV',
                   subtitle: 'Merge units & payments from a CSV',
+                  chevron: true,
                   onTap: () => _importCsv(context),
                 ),
-                const _Divider(),
-                _SettingTile(
-                  icon: Icons.ios_share,
+                const Hairline(inset: _rowInset),
+                ListRow(
+                  leading: IconTile(icon: Icons.ios_share, color: sys.tint),
                   title: 'Export CSV',
                   subtitle: 'Rent collection sheet for this BS year',
+                  chevron: true,
                   onTap: () => _exportCsv(context),
                 ),
-                const _Divider(),
-                _SettingTile(
-                  icon: Icons.auto_awesome,
+                const Hairline(inset: _rowInset),
+                ListRow(
+                  leading: IconTile(
+                      icon: Icons.auto_awesome, color: sys.secondaryLabel),
                   title: 'Generate demo data',
                   subtitle: 'Replace with 3 years of sample history',
+                  chevron: true,
                   onTap: () => _generateDemo(context),
                 ),
-                const _Divider(),
-                _SettingTile(
-                  icon: Icons.delete_sweep_outlined,
+                const Hairline(inset: _rowInset),
+                ListRow(
+                  leading: IconTile(
+                      icon: Icons.delete_sweep_outlined, color: sys.red),
                   title: 'Erase all data',
                   subtitle: auth.phone == null
                       ? 'Delete every unit and payment'
                       : 'Delete every unit and payment, on all your devices',
-                  iconColor: Colors.redAccent,
+                  destructive: true,
+                  chevron: true,
                   onTap: () => _eraseAll(context, synced: auth.phone != null),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 20),
-          const _SectionLabel('About'),
-          GlassPanel(
+          const SizedBox(height: _sectionGap),
+          const SectionTitle('About'),
+          GroupedCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
                     ClipRRect(
-                      borderRadius: BorderRadius.circular(11),
+                      borderRadius: BorderRadius.circular(Sys.radiusInset),
                       child: Image.asset(
                         'assets/icon/rent_bee.png',
                         width: 36,
@@ -198,11 +257,9 @@ class SettingsScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text('Rent Bee',
-                            style: display(
-                                fontSize: 16, fontWeight: FontWeight.w600)),
-                        const Text('v1.0.0 · offline',
-                            style:
-                                TextStyle(color: Brand.muted, fontSize: 12.5)),
+                            style: Type.callout.semibold.colored(sys.label)),
+                        Text('v1.0.0 · offline',
+                            style: Type.caption1.colored(sys.secondaryLabel)),
                       ],
                     ),
                   ],
@@ -212,7 +269,7 @@ class SettingsScreen extends StatelessWidget {
                   'Tracking ${ledger.totalCount} units in '
                   '${ledger.month.labelIn(settings.calendar)}. '
                   'Data is stored on this device.',
-                  style: const TextStyle(color: Brand.muted, fontSize: 12.5),
+                  style: Type.caption1.colored(sys.secondaryLabel).tabular,
                 ),
               ],
             ),
@@ -557,115 +614,22 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
-/// Segmented BS | AD switch for the app-wide date calendar.
-class _CalendarToggle extends StatelessWidget {
-  final CalendarMode mode;
-  final ValueChanged<CalendarMode> onChanged;
-  const _CalendarToggle({required this.mode, required this.onChanged});
+/// A segmented choice inside a card, under a short secondary caption.
+class _ChoiceBody extends StatelessWidget {
+  final String label;
+  final Widget child;
+  const _ChoiceBody({required this.label, required this.child});
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('Display dates in',
-            style: TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w600, color: Brand.muted)),
+        Text(label,
+            style: Type.footnote.semibold.colored(sys.secondaryLabel)),
         const SizedBox(height: 10),
-        Row(
-          children: [
-            for (final m in CalendarMode.values) ...[
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => onChanged(m),
-                  behavior: HitTestBehavior.opaque,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 150),
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                    decoration: BoxDecoration(
-                      gradient: m == mode ? Brand.orangeGradient : null,
-                      color: m == mode ? null : Brand.glassBg,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                          color: m == mode
-                              ? Colors.transparent
-                              : Brand.glassBorder),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      m == CalendarMode.bs
-                          ? 'Bikram Sambat (BS)'
-                          : 'Gregorian (AD)',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12.5,
-                        color: m == mode ? Colors.white : Brand.muted,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              if (m == CalendarMode.bs) const SizedBox(width: 8),
-            ],
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-/// Segmented NPR | USD switch for the ledger's currency.
-class _CurrencyToggle extends StatelessWidget {
-  final Currency currency;
-  final ValueChanged<Currency> onChanged;
-  const _CurrencyToggle({required this.currency, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('Track rent in',
-            style: TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w600, color: Brand.muted)),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            for (final c in Currency.values) ...[
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => onChanged(c),
-                  behavior: HitTestBehavior.opaque,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 150),
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                    decoration: BoxDecoration(
-                      gradient: c == currency ? Brand.orangeGradient : null,
-                      color: c == currency ? null : Brand.glassBg,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                          color: c == currency
-                              ? Colors.transparent
-                              : Brand.glassBorder),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      c == Currency.npr
-                          ? 'Nepali Rupee (Rs)'
-                          : r'US Dollar ($)',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12.5,
-                        color: c == currency ? Colors.white : Brand.muted,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              if (c == Currency.npr) const SizedBox(width: 8),
-            ],
-          ],
-        ),
+        child,
       ],
     );
   }
@@ -716,6 +680,7 @@ class _RaisePercentDialogState extends State<_RaisePercentDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final pct = _percent;
     final String preview;
     if (pct == null) {
@@ -766,7 +731,7 @@ class _RaisePercentDialogState extends State<_RaisePercentDialog> {
           ),
           const SizedBox(height: 12),
           Text(preview,
-              style: const TextStyle(color: Brand.muted, fontSize: 12.5)),
+              style: Type.footnote.colored(sys.secondaryLabel).tabular),
         ],
       ),
       actions: [
@@ -805,81 +770,6 @@ class _PinInput extends StatelessWidget {
         counterText: '',
         isDense: true,
       ),
-    );
-  }
-}
-
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  const _SectionLabel(this.text);
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 8),
-      child: Text(text.toUpperCase(),
-          style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 1,
-              color: Brand.muted)),
-    );
-  }
-}
-
-class _SettingTile extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-  final Color? iconColor;
-  const _SettingTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-    this.iconColor,
-  });
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          children: [
-            Icon(icon, size: 20, color: iconColor ?? Brand.orangeSoft),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title,
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w600)),
-                  Text(subtitle,
-                      style:
-                          const TextStyle(color: Brand.muted, fontSize: 12.5)),
-                ],
-              ),
-            ),
-            const Icon(Icons.chevron_right, color: Brand.muted, size: 20),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Divider extends StatelessWidget {
-  const _Divider();
-  @override
-  Widget build(BuildContext context) {
-    return Divider(
-      height: 1,
-      thickness: 1,
-      indent: 16,
-      endIndent: 16,
-      color: Colors.white.withValues(alpha: 0.08),
     );
   }
 }

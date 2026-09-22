@@ -4,27 +4,33 @@ import 'package:provider/provider.dart';
 import '../../app/theme.dart';
 import '../../state/sync_status.dart';
 
-/// Visual mapping for a [SyncState]: icon, colour, and a short label.
-({IconData icon, Color color, String label}) _look(SyncState s) =>
+/// Visual mapping for a [SyncState]: icon, the status colour for fills, its
+/// text-safe variant, and a short label — resolved for the current appearance.
+({IconData icon, Color color, Color textColor, String label}) _look(
+        Sys sys, SyncState s) =>
     switch (s) {
       SyncState.off => (
           icon: Icons.cloud_off_rounded,
-          color: Brand.muted,
+          color: sys.secondaryLabel,
+          textColor: sys.secondaryLabel,
           label: 'Not syncing',
         ),
       SyncState.syncing => (
           icon: Icons.cloud_sync_rounded,
-          color: Brand.orangeSoft,
+          color: sys.tint,
+          textColor: sys.tintText,
           label: 'Syncing…',
         ),
       SyncState.synced => (
           icon: Icons.cloud_done_rounded,
-          color: Brand.paidText,
+          color: sys.green,
+          textColor: sys.greenText,
           label: 'Backed up',
         ),
       SyncState.error => (
           icon: Icons.cloud_off_rounded,
-          color: Colors.redAccent,
+          color: sys.red,
+          textColor: sys.redText,
           label: 'Sync failed',
         ),
     };
@@ -38,17 +44,19 @@ String _relativeTime(DateTime? t) {
   return '${d.inDays}d ago';
 }
 
-/// Compact app-bar/header badge — a single cloud icon coloured by sync state.
-/// Hidden entirely when sync is off (guest / local-only), so it's only present
-/// when there's a cloud session to report on.
+/// Compact header badge — a status capsule (kit: the state colour at 15%
+/// behind an icon and a footnote label, never colour alone) for the sync
+/// state. Hidden entirely when sync is off (guest / local-only), so it's only
+/// present when there's a cloud session to report on.
 class SyncBadge extends StatelessWidget {
   const SyncBadge({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final ctrl = context.watch<SyncStatusController>();
     if (ctrl.state == SyncState.off) return const SizedBox.shrink();
-    final look = _look(ctrl.state);
+    final look = _look(sys, ctrl.state);
     final synced = ctrl.lastSyncedAt;
     final tip = ctrl.state == SyncState.error
         ? 'Sync failed — changes are saved on this device and will retry'
@@ -57,7 +65,22 @@ class SyncBadge extends StatelessWidget {
             : look.label;
     return Tooltip(
       message: tip,
-      child: Icon(look.icon, size: 16, color: look.color),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: Sys.wash(look.color),
+          borderRadius: BorderRadius.circular(Sys.radiusCapsule),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(look.icon, size: 14, color: look.textColor),
+            const SizedBox(width: 6),
+            Text(look.label,
+                style: Type.footnote.semibold.colored(look.textColor)),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -70,8 +93,9 @@ class SyncStatusLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final ctrl = context.watch<SyncStatusController>();
-    final look = _look(ctrl.state);
+    final look = _look(sys, ctrl.state);
     final synced = ctrl.lastSyncedAt;
     final detail = switch (ctrl.state) {
       SyncState.off => 'Sign in with your phone to back up automatically',
@@ -85,20 +109,19 @@ class SyncStatusLine extends StatelessWidget {
     };
     return Row(
       children: [
-        Icon(look.icon, size: 20, color: look.color),
+        Icon(look.icon, size: 20, color: look.textColor),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(look.label,
-                  style: const TextStyle(
-                      fontSize: 14.5, fontWeight: FontWeight.w600)),
+                  style: Type.subhead.semibold.colored(sys.label)),
               const SizedBox(height: 2),
               Text(detail,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Brand.muted, fontSize: 12)),
+                  style: Type.caption1.colored(sys.secondaryLabel)),
             ],
           ),
         ),

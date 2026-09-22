@@ -9,15 +9,9 @@ import '../../domain/models.dart';
 import '../../domain/money.dart';
 import '../../state/ledger_provider.dart';
 import '../../state/settings_provider.dart';
+import '../widgets/glass.dart';
 import '../widgets/glass_dialog.dart';
 import 'sheet_buttons.dart';
-
-/// Heading style shared by the per-month sections on the unit sheet.
-const _sectionTitle = TextStyle(
-    fontSize: 12.5,
-    fontWeight: FontWeight.w700,
-    color: Brand.muted,
-    letterSpacing: 0.2);
 
 /// Loads the (unit, month) charges row once and feeds it to both
 /// [ChargesSection] and [DeductionSection] — one query per ledger change
@@ -119,20 +113,15 @@ class ChargesSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text('Charges · ${month.monthNameIn(mode)}',
-                  style: _sectionTitle),
-            ),
-            SecondaryButton(
-              icon: Icons.edit_outlined,
-              label: total == 0 ? 'Add' : 'Edit',
-              onTap: () => _edit(context),
-            ),
-          ],
+        SectionTitle(
+          'Charges · ${month.monthNameIn(mode)}',
+          padding: const EdgeInsets.only(bottom: 10),
+          trailing: SecondaryButton(
+            icon: Icons.edit_outlined,
+            label: total == 0 ? 'Add' : 'Edit',
+            onTap: () => _edit(context),
+          ),
         ),
-        const SizedBox(height: 10),
         _Card(
           children: [
             _ChargeRow(
@@ -228,20 +217,15 @@ class DeductionSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text('Deduction · ${month.monthNameIn(mode)}',
-                  style: _sectionTitle),
-            ),
-            SecondaryButton(
-              icon: Icons.edit_outlined,
-              label: d == 0 ? 'Add' : 'Edit',
-              onTap: () => _edit(context),
-            ),
-          ],
+        SectionTitle(
+          'Deduction · ${month.monthNameIn(mode)}',
+          padding: const EdgeInsets.only(bottom: 10),
+          trailing: SecondaryButton(
+            icon: Icons.edit_outlined,
+            label: d == 0 ? 'Add' : 'Edit',
+            onTap: () => _edit(context),
+          ),
         ),
-        const SizedBox(height: 10),
         _Card(
           children: [
             _ChargeRow(
@@ -289,7 +273,6 @@ class DeductionSection extends StatelessWidget {
               'Taken off the ${Money.format(monthlyRent, currency)} rent — '
               'e.g. goods or services you took from this shop. Leave blank '
               'to clear.',
-              style: const TextStyle(color: Brand.muted, fontSize: 13),
             ),
             const SizedBox(height: 12),
             _ChargeField(
@@ -322,20 +305,15 @@ class DeductionSection extends StatelessWidget {
   }
 }
 
-/// Glass card holding a section's rows.
+/// Well holding a section's rows.
 class _Card extends StatelessWidget {
   final List<Widget> children;
   const _Card({required this.children});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return Well(
       padding: const EdgeInsets.symmetric(horizontal: 14),
-      decoration: BoxDecoration(
-        color: Brand.glassBg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Brand.glassBorder),
-      ),
       child: Column(children: children),
     );
   }
@@ -359,6 +337,7 @@ class _ChargeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final currency = context.watch<SettingsProvider>().currency;
     final hasNote = note != null && note!.isNotEmpty;
     return Padding(
@@ -366,7 +345,7 @@ class _ChargeRow extends StatelessWidget {
       child: Row(
         children: [
           if (icon != null) ...[
-            Icon(icon, size: 15, color: Brand.muted),
+            Icon(icon, size: 15, color: sys.secondaryLabel),
             const SizedBox(width: 8),
           ] else
             const SizedBox(width: 23),
@@ -375,16 +354,14 @@ class _ChargeRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(label,
-                    style: TextStyle(
-                        fontSize: 13,
-                        color: bold ? Brand.text : Brand.muted,
-                        fontWeight: bold ? FontWeight.w700 : FontWeight.w500)),
+                    style: bold
+                        ? Type.subhead.semibold.colored(sys.label)
+                        : Type.subhead.colored(sys.secondaryLabel)),
                 if (hasNote)
                   Text(note!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 11.5, color: Brand.muted)),
+                      style: Type.caption1.colored(sys.secondaryLabel)),
               ],
             ),
           ),
@@ -392,10 +369,9 @@ class _ChargeRow extends StatelessWidget {
               amount == 0 && !bold
                   ? '—'
                   : '${negative ? '− ' : ''}${Money.format(amount, currency)}',
-              style: display(
-                  fontSize: bold ? 15 : 14,
-                  fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
-                  fontFeatures: tabularNums)),
+              style: (bold ? Type.subhead.semibold : Type.subhead)
+                  .colored(sys.label)
+                  .tabular),
         ],
       ),
     );
@@ -405,8 +381,7 @@ class _ChargeRow extends StatelessWidget {
 class _Hair extends StatelessWidget {
   const _Hair();
   @override
-  Widget build(BuildContext context) =>
-      Divider(height: 1, thickness: 1, color: Brand.glassBorder);
+  Widget build(BuildContext context) => const Hairline(inset: 0);
 }
 
 class _ChargeField extends StatelessWidget {

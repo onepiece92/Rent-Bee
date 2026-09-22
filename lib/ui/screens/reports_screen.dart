@@ -14,7 +14,12 @@ import '../sheets/unit_detail_sheet.dart';
 import '../util/csv_share.dart';
 import '../util/sms_reminder.dart';
 import '../widgets/glass.dart';
+import '../widgets/tap_target.dart';
 import '../widgets/toast.dart';
+
+/// Section headings get a little air above them, on top of the 12 pt the
+/// previous card leaves.
+const _sectionPad = EdgeInsets.fromLTRB(Sys.gutter, 8, Sys.gutter, 8);
 
 /// Month / quarter / year summary + per-month breakdown + outstanding list
 /// + CSV export. Hosted as a tab inside [ScaffoldWithNavBar].
@@ -160,147 +165,108 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final mode = context.watch<SettingsProvider>().calendar;
     return SafeArea(
       bottom: false,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: ListView(
+        padding: const EdgeInsets.only(bottom: 120), // clear the floating tab bar
         children: [
+          // Large Title with the period it describes; the ‹ › period stepper
+          // is the title row's toolbar.
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+            padding: const EdgeInsets.fromLTRB(Sys.gutter, 12, Sys.gutter, 12),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: Text('Reports',
-                      style:
-                          display(fontSize: 20, fontWeight: FontWeight.w600)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Reports',
+                          style: Type.largeTitle.colored(sys.label)),
+                      const SizedBox(height: 2),
+                      Text(_periodLabel(mode),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Type.subhead.colored(sys.secondaryLabel)),
+                    ],
+                  ),
                 ),
-                IconButton(
-                  tooltip: 'Export CSV',
-                  onPressed: _exportCsv,
-                  icon: const Icon(Icons.ios_share, color: Brand.orange),
+                const SizedBox(width: 8),
+                GlassIconButton(
+                  icon: Icons.chevron_left,
+                  semanticLabel: 'Previous period',
+                  onTap: () => _step(-1),
+                ),
+                const SizedBox(width: 8),
+                GlassIconButton(
+                  icon: Icons.chevron_right,
+                  semanticLabel: 'Next period',
+                  onTap: () => _step(1),
                 ),
               ],
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 6),
-            child: _ScopeToggle(scope: _scope, onChanged: _setScope),
+            padding: const EdgeInsets.fromLTRB(Sys.gutter, 0, Sys.gutter, 16),
+            child: SegmentedControl<ReportScope>(
+              values: ReportScope.values,
+              selected: _scope,
+              label: (s) => s.label,
+              onChanged: _setScope,
+              glass: true,
+            ),
+          ),
+          FutureBuilder<PeriodSummary>(
+            future: _future,
+            builder: (context, snap) {
+              if (snap.connectionState == ConnectionState.waiting &&
+                  !snap.hasData) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 48),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              if (snap.hasError) {
+                return Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Center(
+                    child: Text('Could not load report: ${snap.error}',
+                        textAlign: TextAlign.center,
+                        style: Type.subhead.colored(sys.secondaryLabel)),
+                  ),
+                );
+              }
+              final summary = snap.data;
+              if (summary == null) return const SizedBox.shrink();
+              return _ReportBody(
+                  scope: _scope,
+                  summary: summary,
+                  mode: mode,
+                  anchor: _anchor,
+                  liability: _liability);
+            },
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
-            child: _PeriodStepper(
-              label: _periodLabel(mode),
-              onPrev: () => _step(-1),
-              onNext: () => _step(1),
-            ),
-          ),
-          Expanded(
-            child: FutureBuilder<PeriodSummary>(
-              future: _future,
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting &&
-                    !snap.hasData) {
-                  return const Center(
-                      child: CircularProgressIndicator(color: Brand.orange));
-                }
-                if (snap.hasError) {
-                  return Center(
-                    child: Text('Could not load report: ${snap.error}',
-                        style: const TextStyle(color: Brand.muted)),
-                  );
-                }
-                final summary = snap.data;
-                if (summary == null) return const SizedBox.shrink();
-                return _ReportBody(
-                    scope: _scope,
-                    summary: summary,
-                    mode: mode,
-                    anchor: _anchor,
-                    liability: _liability);
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Month / Quarter / Year segmented control.
-class _ScopeToggle extends StatelessWidget {
-  final ReportScope scope;
-  final ValueChanged<ReportScope> onChanged;
-  const _ScopeToggle({required this.scope, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassPanel(
-      padding: const EdgeInsets.all(4),
-      child: Row(
-        children: [
-          for (final s in ReportScope.values)
-            Expanded(
-              child: GestureDetector(
-                onTap: () => onChanged(s),
-                behavior: HitTestBehavior.opaque,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  decoration: BoxDecoration(
-                    gradient: s == scope ? Brand.orangeGradient : null,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    s.label,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: s == scope ? Colors.white : Brand.muted,
-                    ),
-                  ),
-                ),
+            padding: const EdgeInsets.fromLTRB(Sys.gutter, 20, Sys.gutter, 0),
+            child: Center(
+              child: AppButton(
+                kind: ButtonKind.tinted,
+                icon: Icons.ios_share,
+                label: 'Export CSV',
+                onTap: _exportCsv,
               ),
             ),
+          ),
         ],
       ),
     );
   }
 }
 
-/// ‹ period label › stepper.
-class _PeriodStepper extends StatelessWidget {
-  final String label;
-  final VoidCallback onPrev;
-  final VoidCallback onNext;
-  const _PeriodStepper(
-      {required this.label, required this.onPrev, required this.onNext});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        IconButton(
-          onPressed: onPrev,
-          icon: const Icon(Icons.chevron_left, color: Brand.text),
-        ),
-        Expanded(
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: display(fontSize: 16, fontWeight: FontWeight.w600),
-          ),
-        ),
-        IconButton(
-          onPressed: onNext,
-          icon: const Icon(Icons.chevron_right, color: Brand.text),
-        ),
-      ],
-    );
-  }
-}
-
-/// Scrollable body: summary grid, (period) per-month breakdown, outstanding.
+/// Report content: summary grid, (period) per-month breakdown, outstanding.
+/// Lives inside the screen's scroll view, so it is a plain column.
 class _ReportBody extends StatelessWidget {
   final ReportScope scope;
   final PeriodSummary summary;
@@ -316,11 +282,12 @@ class _ReportBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final isPeriod = scope != ReportScope.month;
     final outstanding = summary.outstanding;
 
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 120), // clear the footer navbar
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _SummaryGrid(summary: summary),
         if (summary.chargesExpected > 0 || summary.deductions > 0)
@@ -335,40 +302,51 @@ class _ReportBody extends StatelessWidget {
             },
           ),
         if (isPeriod) ...[
-          const _SectionTitle('Monthly breakdown'),
+          const SectionTitle('Monthly breakdown', padding: _sectionPad),
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
-            child: GlassPanel(
+            padding: const EdgeInsets.fromLTRB(Sys.gutter, 0, Sys.gutter, 12),
+            child: GroupedCard(
+              padding: const EdgeInsets.symmetric(vertical: 4),
               child: Column(
                 children: [
-                  for (final b in summary.months)
-                    _BreakdownRow(bucket: b, mode: mode),
+                  for (var i = 0; i < summary.months.length; i++) ...[
+                    if (i > 0) const Hairline(),
+                    _BreakdownRow(bucket: summary.months[i], mode: mode),
+                  ],
                 ],
               ),
             ),
           ),
         ],
-        _SectionTitle('Outstanding (${outstanding.length})'),
-        if (outstanding.isEmpty)
-          const Padding(
-            padding: EdgeInsets.all(32),
-            child: Center(
-              child: Text('Everyone has paid 🎉',
-                  style: TextStyle(color: Brand.muted)),
-            ),
-          )
-        else
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18),
-            child: Column(
-              children: [
-                for (final d in outstanding) ...[
-                  _OutstandingRow(debt: d, showMonths: isPeriod, anchor: anchor),
-                  const SizedBox(height: 8),
-                ],
-              ],
-            ),
-          ),
+        SectionTitle('Outstanding (${outstanding.length})',
+            padding: _sectionPad),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: Sys.gutter),
+          child: outstanding.isEmpty
+              ? GroupedCard(
+                  padding: const EdgeInsets.all(24),
+                  child: Center(
+                    child: Text('Everyone has paid 🎉',
+                        style: Type.subhead.colored(sys.secondaryLabel)),
+                  ),
+                )
+              : GroupedCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      for (var i = 0; i < outstanding.length; i++) ...[
+                        // Inset past the avatar so the line starts under the
+                        // tenant's name, like iOS.
+                        if (i > 0) const Hairline(inset: 72),
+                        _OutstandingRow(
+                            debt: outstanding[i],
+                            showMonths: isPeriod,
+                            anchor: anchor),
+                      ],
+                    ],
+                  ),
+                ),
+        ),
       ],
     );
   }
@@ -376,13 +354,15 @@ class _ReportBody extends StatelessWidget {
 
 /// What the period's Expected is made of — rent vs. utility charges vs.
 /// deductions. Only rendered when the period actually has charges or
-/// deductions, so an all-rent ledger keeps its uncluttered grid.
+/// deductions, so an all-rent ledger keeps its uncluttered grid. Reads as a
+/// section footer under the summary grid.
 class _IncomeBreakdown extends StatelessWidget {
   final PeriodSummary summary;
   const _IncomeBreakdown({required this.summary});
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final s = summary;
     final currency = context.watch<SettingsProvider>().currency;
     final parts = [
@@ -393,42 +373,24 @@ class _IncomeBreakdown extends StatelessWidget {
         '− Deductions ${Money.format(s.deductions, currency)}',
     ];
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-      child: GlassPanel.tile(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          children: [
-            const Icon(Icons.functions, size: 15, color: Brand.muted),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                parts.join('  ·  '),
-                style: const TextStyle(
-                  fontSize: 12.5,
-                  color: Brand.muted,
-                  fontWeight: FontWeight.w600,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                ),
-              ),
+      padding: const EdgeInsets.fromLTRB(
+          Sys.gutter + 4, 0, Sys.gutter + 4, 16),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(Icons.functions, size: 14, color: sys.secondaryLabel),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              parts.join('  ·  '),
+              style: Type.footnote.colored(sys.secondaryLabel).tabular,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
-    );
-  }
-}
-
-class _SectionTitle extends StatelessWidget {
-  final String text;
-  const _SectionTitle(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
-      child: Text(text,
-          style:
-              const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
     );
   }
 }
@@ -440,46 +402,28 @@ class _BreakdownRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final currency = context.watch<SettingsProvider>().currency;
-    final full = bucket.collected >= bucket.expected && bucket.expected > 0;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding:
+          const EdgeInsets.symmetric(horizontal: Sys.gutter, vertical: 10),
       child: Row(
         children: [
           SizedBox(
-            width: 76,
+            width: 80,
             child: Text(
                 BsMonth(bucket.year, bucket.month).monthNameIn(mode),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w600)),
+                style: Type.subhead.colored(sys.label)),
           ),
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: Stack(
-                children: [
-                  Container(height: 8, color: const Color(0x22FFFFFF)),
-                  FractionallySizedBox(
-                    widthFactor: bucket.progress,
-                    child: Container(
-                      height: 8,
-                      color: full ? Brand.paid : Brand.orange,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          // Turns green by itself once the month is fully collected.
+          Expanded(child: ProgressBar(value: bucket.progress)),
           const SizedBox(width: 12),
           Text(
             '${Money.format(bucket.collected, currency)} / '
             '${Money.format(bucket.expected, currency)}',
-            style: const TextStyle(
-              fontSize: 12,
-              color: Brand.muted,
-              fontFeatures: [FontFeature.tabularFigures()],
-            ),
+            style: Type.footnote.colored(sys.secondaryLabel).tabular,
           ),
         ],
       ),
@@ -496,55 +440,51 @@ class _OutstandingRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final u = debt.unit;
     final hasPhone = u.phone != null && u.phone!.isNotEmpty;
     final currency = context.watch<SettingsProvider>().currency;
-    return GlassPanel.tile(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      // The row is the shortcut to act on the debt: open the unit's sheet.
-      onTap: () => UnitDetailSheet.show(context, u.id),
-      child: Row(
+    return ListRow(
+      leading: CodeAvatar(code: u.code, paid: false),
+      title: u.tenantName,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(u.code,
-              style: display(
-                  fontWeight: FontWeight.w700, color: Brand.orangeSoft)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(u.tenantName,
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-          ),
-          if (hasPhone)
-            IconButton(
-              tooltip: 'Send reminder',
-              visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.sms_outlined,
-                  size: 18, color: Brand.muted),
-              onPressed: () => sendRentReminder(
-                context,
-                u,
-                anchor,
-                paid: false,
-                amount: debt.amountOwed,
-                currency: currency,
-                months: debt.monthsUnpaid,
+          if (hasPhone) ...[
+            Tooltip(
+              message: 'Send reminder',
+              child: TapTarget(
+                onTap: () => sendRentReminder(
+                  context,
+                  u,
+                  anchor,
+                  paid: false,
+                  amount: debt.amountOwed,
+                  currency: currency,
+                  months: debt.monthsUnpaid,
+                ),
+                child:
+                    Icon(Icons.sms_outlined, size: 18, color: sys.tintText),
               ),
             ),
+            const SizedBox(width: 4),
+          ],
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(Money.format(debt.amountOwed, currency),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontFeatures: [FontFeature.tabularFigures()],
-                  )),
+                  style: Type.subhead.semibold.tabular
+                      .colored(sys.orangeText)),
               if (showMonths)
                 Text('${debt.monthsUnpaid} mo',
-                    style: const TextStyle(
-                        fontSize: 11, color: Brand.muted)),
+                    style: Type.footnote.colored(sys.secondaryLabel)),
             ],
           ),
         ],
       ),
+      chevron: true,
+      // The row is the shortcut to act on the debt: open the unit's sheet.
+      onTap: () => UnitDetailSheet.show(context, u.id),
     );
   }
 }
@@ -587,111 +527,134 @@ class _DepositCardState extends State<_DepositCard> {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final l = widget.liability;
     final currency = context.watch<SettingsProvider>().currency;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-      child: GlassPanel(
-        padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(Sys.gutter, 0, Sys.gutter, 12),
+      child: GroupedCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                const Icon(Icons.account_balance_wallet_outlined,
-                    size: 18, color: Brand.muted),
+                Icon(Icons.account_balance_wallet_outlined,
+                    size: 20, color: sys.secondaryLabel),
                 const SizedBox(width: 8),
-                const Expanded(
+                Expanded(
                   child: Text('Deposit liability',
-                      style: TextStyle(color: Brand.muted, fontSize: 12)),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Type.title3.semibold.colored(sys.label)),
                 ),
+                const SizedBox(width: 12),
                 Text(
                   Money.format(l.total, currency),
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    fontFeatures: [FontFeature.tabularFigures()],
-                  ),
+                  style: Type.title3.semibold.colored(sys.label).tabular,
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            _DepositLine(
-              label: 'Held · ${l.heldCount} active',
-              amount: l.held,
-              color: Brand.text,
-            ),
-            if (l.hasOverdue) ...[
-              const SizedBox(height: 6),
-              GestureDetector(
-                onTap: _toggle,
-                behavior: HitTestBehavior.opaque,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _DepositLine(
-                        label: 'Due back · ${l.dueBackCount} vacated',
-                        amount: l.dueBack,
-                        color: Brand.orangeSoft,
-                        warn: true,
+            const SizedBox(height: 12),
+            // The split, as an inset list inside the card.
+            Well(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 12),
+                    child: _DepositLine(
+                      label: 'Held · ${l.heldCount} active',
+                      amount: l.held,
+                      color: sys.label,
+                    ),
+                  ),
+                  if (l.hasOverdue) ...[
+                    const Hairline(inset: 12),
+                    // Tapping the overdue line expands the units behind it.
+                    InkWell(
+                      onTap: _toggle,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 12),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: _DepositLine(
+                                label:
+                                    'Due back · ${l.dueBackCount} vacated',
+                                amount: l.dueBack,
+                                color: sys.orangeText,
+                                warn: true,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Icon(
+                              _expanded
+                                  ? Icons.expand_less
+                                  : Icons.expand_more,
+                              size: 18,
+                              color: sys.secondaryLabel,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    Icon(
-                      _expanded ? Icons.expand_less : Icons.expand_more,
-                      size: 18,
-                      color: Brand.muted,
-                    ),
-                  ],
-                ),
-              ),
-              if (_expanded)
-                FutureBuilder<List<Unit>>(
-                  future: _dueBack,
-                  builder: (context, snap) {
-                    final units = snap.data;
-                    if (units == null) return const SizedBox.shrink();
-                    return Column(
-                      children: [
-                        for (final u in units)
-                          GestureDetector(
-                            onTap: () => UnitDetailSheet.show(context, u.id),
-                            behavior: HitTestBehavior.opaque,
-                            child: Padding(
-                              padding: const EdgeInsets.only(top: 8),
-                              child: Row(
-                                children: [
-                                  Text(u.code,
-                                      style: display(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w700,
-                                          color: Brand.orangeSoft)),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(u.tenantName,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style:
-                                            const TextStyle(fontSize: 13)),
-                                  ),
-                                  Text(
-                                    Money.format(u.depositAmount, currency),
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      fontFeatures: [
-                                        FontFeature.tabularFigures()
+                    if (_expanded)
+                      FutureBuilder<List<Unit>>(
+                        future: _dueBack,
+                        builder: (context, snap) {
+                          final units = snap.data;
+                          if (units == null) return const SizedBox.shrink();
+                          return Column(
+                            children: [
+                              for (final u in units) ...[
+                                const Hairline(inset: 12),
+                                InkWell(
+                                  onTap: () =>
+                                      UnitDetailSheet.show(context, u.id),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12, vertical: 6),
+                                    child: Row(
+                                      children: [
+                                        CodeAvatar(
+                                            code: u.code,
+                                            paid: false,
+                                            size: 40),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(u.tenantName,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: Type.subhead
+                                                  .colored(sys.label)),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Text(
+                                          Money.format(
+                                              u.depositAmount, currency),
+                                          style: Type.subhead.semibold
+                                              .colored(sys.label)
+                                              .tabular,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Icon(Icons.chevron_right,
+                                            size: 20,
+                                            color: sys.tertiaryLabel),
                                       ],
                                     ),
                                   ),
-                                ],
-                              ),
-                            ),
-                          ),
-                      ],
-                    );
-                  },
-                ),
-            ],
+                                ),
+                              ],
+                            ],
+                          );
+                        },
+                      ),
+                  ],
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -713,27 +676,23 @@ class _DepositLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final currency = context.watch<SettingsProvider>().currency;
     return Row(
       children: [
         if (warn) ...[
-          const Icon(Icons.error_outline, size: 14, color: Brand.orangeSoft),
+          Icon(Icons.error_outline, size: 15, color: sys.orangeText),
           const SizedBox(width: 6),
         ],
         Expanded(
           child: Text(label,
-              style: TextStyle(
-                  fontSize: 13,
-                  color: warn ? Brand.orangeSoft : Brand.muted)),
+              style: Type.subhead
+                  .colored(warn ? sys.orangeText : sys.secondaryLabel)),
         ),
+        const SizedBox(width: 12),
         Text(
           Money.format(amount, currency),
-          style: TextStyle(
-            fontSize: 14,
-            color: color,
-            fontWeight: FontWeight.w600,
-            fontFeatures: const [FontFeature.tabularFigures()],
-          ),
+          style: Type.subhead.semibold.colored(color).tabular,
         ),
       ],
     );
@@ -746,41 +705,43 @@ class _SummaryGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final currency = context.watch<SettingsProvider>().currency;
     final cells = [
-      ('Expected', Money.format(summary.expected, currency), Brand.text),
-      ('Collected', Money.format(summary.collected, currency), Brand.paidText),
-      ('Pending', Money.format(summary.pending, currency), Brand.orangeSoft),
-      ('Paid', '${summary.paidSlots}/${summary.totalSlots}', Brand.text),
+      ('Expected', Money.format(summary.expected, currency), sys.label),
+      ('Collected', Money.format(summary.collected, currency), sys.greenText),
+      ('Pending', Money.format(summary.pending, currency), sys.orangeText),
+      ('Paid', '${summary.paidSlots}/${summary.totalSlots}', sys.label),
     ];
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 4, 18, 12),
+      padding: const EdgeInsets.fromLTRB(Sys.gutter, 0, Sys.gutter, 12),
       child: GridView.count(
         crossAxisCount: 2,
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        childAspectRatio: 2.4,
+        mainAxisSpacing: 12,
+        crossAxisSpacing: 12,
+        // Tall enough for caption + Title 2 at 14 pt padding, with room for
+        // a couple of Dynamic Type steps.
+        childAspectRatio: 1.8,
         children: [
           for (final c in cells)
-            GlassPanel.tile(
+            GroupedCard(
               padding: const EdgeInsets.all(14),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(c.$1,
-                      style:
-                          const TextStyle(color: Brand.muted, fontSize: 12)),
+                  Text(c.$1, style: Type.caption1.colored(sys.secondaryLabel)),
                   const SizedBox(height: 4),
-                  Text(c.$2,
-                      style: TextStyle(
-                        color: c.$3,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                      )),
+                  // Big totals shrink to fit rather than truncate.
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(c.$2,
+                        maxLines: 1,
+                        style: Type.title2.semibold.tabular.colored(c.$3)),
+                  ),
                 ],
               ),
             ),

@@ -158,30 +158,30 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final auth = context.watch<AuthProvider>();
     final isOtp = _step == _Step.otp;
 
     return Scaffold(
-      body: BrandBackground(
+      body: PageBackground(
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(Sys.gutter),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 380),
-                child: GlassPanel(
-                  padding: const EdgeInsets.all(28),
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: GroupedCard(
+                  padding: const EdgeInsets.all(24),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Icon(Icons.smartphone_rounded,
-                          color: Brand.orange, size: 44),
-                      const SizedBox(height: 14),
+                      const _AppIcon(),
+                      const SizedBox(height: 16),
                       Text(
                         'Rent Bee',
                         textAlign: TextAlign.center,
-                        style: display(fontSize: 30, fontWeight: FontWeight.w600),
+                        style: Type.title1.bold.colored(sys.label),
                       ),
                       const SizedBox(height: 6),
                       Text(
@@ -189,7 +189,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
                             ? 'Enter the code sent to ${_phoneE164 ?? ''}'
                             : 'Verify your phone number to get started',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(color: Brand.muted),
+                        style: Type.subhead.colored(sys.secondaryLabel),
                       ),
                       const SizedBox(height: 24),
                       if (!isOtp)
@@ -212,43 +212,34 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
                           keyboardType: TextInputType.number,
                           autofocus: true,
                           maxLength: 6,
-                          letterSpacing: 8,
+                          spaced: true, // a code reads digit by digit
                           formatters: [FilteringTextInputFormatter.digitsOnly],
                           onSubmitted: _busy ? null : () => _confirmCode(auth),
                         ),
                       if (_error != null) ...[
                         const SizedBox(height: 12),
                         Text(_error!,
-                            style: const TextStyle(color: Colors.redAccent)),
+                            textAlign: TextAlign.center,
+                            style: Type.footnote.colored(sys.redText)),
                       ],
-                      const SizedBox(height: 22),
-                      FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Brand.orange,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                        ),
-                        onPressed: _busy
+                      const SizedBox(height: 24),
+                      AppButton(
+                        kind: ButtonKind.prominent,
+                        expand: true,
+                        busy: _busy,
+                        label: isOtp ? 'Verify' : 'Send code',
+                        onTap: _busy
                             ? null
                             : () => isOtp ? _confirmCode(auth) : _sendCode(auth),
-                        child: _busy
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white),
-                              )
-                            : Text(isOtp ? 'Verify' : 'Send code',
-                                style: const TextStyle(
-                                    fontSize: 16, fontWeight: FontWeight.w600)),
                       ),
                       if (isOtp && !_busy) ...[
                         const SizedBox(height: 8),
-                        TextButton(
-                          onPressed: _editNumber,
-                          child: const Text('Change number',
-                              style: TextStyle(color: Brand.muted)),
+                        Center(
+                          child: AppButton(
+                            kind: ButtonKind.plain,
+                            label: 'Change number',
+                            onTap: _editNumber,
+                          ),
                         ),
                       ],
                       // Debug-only shortcut to skip OTP + PIN while testing
@@ -256,10 +247,12 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
                       // compiled into release builds.
                       if (kDebugMode && !isOtp && !_busy) ...[
                         const SizedBox(height: 8),
-                        TextButton(
-                          onPressed: () => auth.enterGuestMode(),
-                          child: const Text('Continue as guest (debug)',
-                              style: TextStyle(color: Brand.muted)),
+                        Center(
+                          child: AppButton(
+                            kind: ButtonKind.plain,
+                            label: 'Continue as guest (debug)',
+                            onTap: () => auth.enterGuestMode(),
+                          ),
                         ),
                       ],
                     ],
@@ -274,6 +267,36 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
   }
 }
 
+/// The app icon at 72 pt with 16 pt corners, centred above the title.
+class _AppIcon extends StatelessWidget {
+  const _AppIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    final sys = Sys.of(context);
+    return Center(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Image.asset(
+          'assets/icon/rent_bee.png',
+          width: 72,
+          height: 72,
+          // Source is 512² — decode to ~2x the display size, not full.
+          cacheWidth: 144,
+          cacheHeight: 144,
+          fit: BoxFit.cover,
+          // The title text below carries the name.
+          excludeFromSemantics: true,
+          errorBuilder: (_, _, _) =>
+              Icon(Icons.apartment_rounded, size: 48, color: sys.tint),
+        ),
+      ),
+    );
+  }
+}
+
+/// A phone / code field on the theme's input decoration (tertiarySystemFill,
+/// no border, 14 pt radius) with tabular digits.
 class _Field extends StatelessWidget {
   final TextEditingController controller;
   final String label;
@@ -281,7 +304,6 @@ class _Field extends StatelessWidget {
   final TextInputType keyboardType;
   final bool autofocus;
   final int? maxLength;
-  final double letterSpacing;
   final List<TextInputFormatter> formatters;
   final VoidCallback? onSubmitted;
 
@@ -293,9 +315,12 @@ class _Field extends StatelessWidget {
     this.hint,
     this.autofocus = false,
     this.maxLength,
-    this.letterSpacing = 1,
     this.onSubmitted,
+    this.spaced = false,
   });
+
+  /// Wide tracking for one-time codes, so each digit is checkable at a glance.
+  final bool spaced;
 
   @override
   Widget build(BuildContext context) {
@@ -306,25 +331,11 @@ class _Field extends StatelessWidget {
       inputFormatters: formatters,
       maxLength: maxLength,
       onSubmitted: onSubmitted == null ? null : (_) => onSubmitted!(),
-      style: TextStyle(letterSpacing: letterSpacing, fontSize: 18),
+      style: spaced ? Type.body.tabular.copyWith(letterSpacing: 8) : Type.body.tabular,
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
         counterText: '',
-        filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.06),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Brand.glassBorder),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Brand.glassBorder),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Brand.orange),
-        ),
       ),
     );
   }

@@ -1,46 +1,32 @@
 import 'package:flutter/material.dart';
 
-import '../../app/theme.dart';
+import '../widgets/glass.dart';
 
-/// Ghost button for secondary actions inside the unit sheets — an icon + label
-/// on a glass pill. Used at full width (inside an `Expanded`) and at its natural
-/// min width next to a heading, so it carries its own horizontal padding.
+/// Secondary action inside the unit sheets: a compact tinted capsule with an
+/// icon + label (kit `tinted`). Sits at its natural width next to a heading,
+/// or at full width when [expand] is set (callers that used to wrap it in an
+/// `Expanded`).
 class SecondaryButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final bool expand;
   const SecondaryButton(
       {super.key,
       required this.icon,
       required this.label,
-      required this.onTap});
+      required this.onTap,
+      this.expand = false});
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return AppButton(
+      label: label,
+      icon: icon,
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Brand.glassBg,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Brand.glassBorder),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 15, color: Brand.orangeSoft),
-            const SizedBox(width: 6),
-            Text(label,
-                style: const TextStyle(
-                    color: Brand.orangeSoft,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13)),
-          ],
-        ),
-      ),
+      kind: ButtonKind.tinted,
+      compact: true,
+      expand: expand,
     );
   }
 }

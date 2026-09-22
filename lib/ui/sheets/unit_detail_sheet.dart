@@ -13,6 +13,7 @@ import '../util/sms_reminder.dart';
 import '../widgets/glass.dart';
 import '../widgets/glass_dialog.dart';
 import '../widgets/sheet_scaffold.dart';
+import '../widgets/tap_target.dart';
 import 'charges_section.dart';
 import 'deposit_cell.dart';
 import 'edit_unit_sheet.dart';
@@ -25,7 +26,7 @@ class UnitDetailSheet extends StatelessWidget {
   const UnitDetailSheet({super.key, required this.unitId});
 
   static Future<void> show(BuildContext context, int unitId) {
-    return showGlassSheet(
+    return showSheet(
       context,
       (_) => UnitDetailSheet(unitId: unitId),
     );
@@ -33,6 +34,7 @@ class UnitDetailSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final ledger = context.watch<LedgerProvider>();
     final settings = context.watch<SettingsProvider>();
     final mode = settings.calendar;
@@ -55,21 +57,18 @@ class UnitDetailSheet extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(s.tenantName,
-                      style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: -0.1)),
+                      style: Type.title3.semibold.colored(sys.label)),
                   Text(s.businessType.isEmpty ? s.code : s.businessType,
-                      style: const TextStyle(color: Brand.muted, fontSize: 12.5)),
+                      style: Type.subhead.colored(sys.secondaryLabel)),
                 ],
               ),
             ),
             _IconBtn(
                 icon: Icons.edit_outlined,
                 onTap: () => EditUnitSheet.show(context, unit: s)),
-            const SizedBox(width: 8),
             _IconBtn(
                 icon: Icons.delete_outline,
+                destructive: true,
                 onTap: () => _confirmDelete(context, ledger, s)),
           ],
         ),
@@ -131,13 +130,8 @@ class UnitDetailSheet extends StatelessWidget {
             unitId: s.id, monthlyRent: s.monthlyRent, month: ledger.month),
 
         const SizedBox(height: 20),
-        const Text('Recent months',
-            style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w700,
-                color: Brand.muted,
-                letterSpacing: 0.2)),
-        const SizedBox(height: 10),
+        const SectionTitle('Recent months',
+            padding: EdgeInsets.only(bottom: 8)),
         _HistoryStrip(unitId: s.id),
       ],
     );
@@ -187,6 +181,7 @@ class _BigToggleButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final ledger = context.read<LedgerProvider>();
     final settings = context.watch<SettingsProvider>();
     final mode = settings.calendar;
@@ -201,57 +196,36 @@ class _BigToggleButton extends StatelessWidget {
       case PayStatus.paid:
         if (payment == null) {
           // The deduction alone covered the rent — no cash to collect or undo.
-          return _BaseBigButton(
-            onTap: () {},
-            bg: Brand.paid.withValues(alpha: 0.12),
-            border: Brand.paidPillBorder,
-            child: const Text('Covered by deduction · nothing to collect',
-                style: TextStyle(
-                    color: Brand.paidText,
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w700)),
+          return const AppButton(
+            label: 'Covered by deduction · nothing to collect',
+            onTap: null,
+            kind: ButtonKind.gray,
+            expand: true,
           );
         }
         final paidOn = payment!.paidOn;
         final on = paidOn != null ? dateLabel(paidOn, mode) : '—';
-        return _BaseBigButton(
+        return _PaidCapsule(
+          label: 'Paid $on · tap to undo',
           onTap: () => ledger.undo(unit.id),
-          bg: Brand.paid.withValues(alpha: 0.12),
-          border: Brand.paidPillBorder,
-          child: Text('Paid $on · tap to undo',
-              style: const TextStyle(
-                  color: Brand.paidText,
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.w700)),
         );
 
       case PayStatus.partial:
         final remaining = row.remaining;
         return Column(
           children: [
-            _BaseBigButton(
+            Text(
+                '${Money.format(paidAmount, currency)} of '
+                '${Money.format(due, currency)} paid',
+                textAlign: TextAlign.center,
+                style: Type.footnote.colored(sys.secondaryLabel).tabular),
+            const SizedBox(height: 6),
+            AppButton(
+              label: 'Collect remaining '
+                  '${Money.format(remaining, currency)}',
               onTap: () => ledger.markPaid(unit), // settle the rest in full
-              gradient: Brand.orangeGradient,
-              border: Colors.white.withValues(alpha: 0.3),
-              glow: true,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                      '${Money.format(paidAmount, currency)} of '
-                      '${Money.format(due, currency)} paid',
-                      style: const TextStyle(
-                          color: Colors.white70, fontSize: 12)),
-                  const SizedBox(height: 2),
-                  Text(
-                      'Collect remaining '
-                      '${Money.format(remaining, currency)}',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w700)),
-                ],
-              ),
+              kind: ButtonKind.prominent,
+              expand: true,
             ),
             const SizedBox(height: 10),
             Row(
@@ -261,14 +235,18 @@ class _BigToggleButton extends StatelessWidget {
                     icon: Icons.edit_outlined,
                     label: 'Edit amount',
                     onTap: () => _recordPartial(context, ledger),
+                    expand: true,
                   ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: SecondaryButton(
+                  child: AppButton(
                     icon: Icons.close,
                     label: 'Undo',
                     onTap: () => ledger.undo(unit.id),
+                    kind: ButtonKind.gray,
+                    compact: true,
+                    expand: true,
                   ),
                 ),
               ],
@@ -280,56 +258,35 @@ class _BigToggleButton extends StatelessWidget {
         if (due == 0) {
           // Rent 0, no charges and nothing deducted: there is nothing to
           // collect, and a Collect tap would only write an empty payment row.
-          return _BaseBigButton(
-            onTap: () {},
-            bg: Brand.glassBg,
-            border: Brand.glassBorder,
-            child: const Text('No rent set for this unit',
-                style: TextStyle(
-                    color: Brand.muted,
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w700)),
+          return const AppButton(
+            label: 'No rent set for this unit',
+            onTap: null,
+            kind: ButtonKind.gray,
+            expand: true,
           );
         }
         return Column(
           children: [
-            _BaseBigButton(
+            AppButton(
+              label: 'Collect ${Money.format(due, currency)} for '
+                  '${month.monthNameIn(mode)}',
+              icon: Icons.arrow_downward,
               onTap: () => ledger.markPaid(unit),
-              gradient: Brand.orangeGradient,
-              border: Colors.white.withValues(alpha: 0.3),
-              glow: true,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.arrow_downward,
-                          size: 17, color: Colors.white),
-                      const SizedBox(width: 7),
-                      Text(
-                          'Collect ${Money.format(due, currency)} for '
-                          '${month.monthNameIn(mode)}',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.w700)),
-                    ],
-                  ),
-                  if (row.charges > 0 || row.deduction > 0) ...[
-                    const SizedBox(height: 2),
-                    Text(_dueBreakdown(row, currency),
-                        style: const TextStyle(
-                            color: Colors.white70, fontSize: 12)),
-                  ],
-                ],
-              ),
+              kind: ButtonKind.prominent,
+              expand: true,
             ),
+            if (row.charges > 0 || row.deduction > 0) ...[
+              const SizedBox(height: 6),
+              Text(_dueBreakdown(row, currency),
+                  textAlign: TextAlign.center,
+                  style: Type.footnote.colored(sys.secondaryLabel).tabular),
+            ],
             const SizedBox(height: 10),
             SecondaryButton(
               icon: Icons.pie_chart_outline,
               label: 'Record partial amount',
               onTap: () => _recordPartial(context, ledger),
+              expand: true,
             ),
           ],
         );
@@ -359,7 +316,6 @@ class _BigToggleButton extends StatelessWidget {
                   : 'Rent is ${Money.format(unit.monthlyRent, currency)}. '
                       'Enter the total received for ${month.monthName} '
                       '${month.year}.',
-              style: const TextStyle(color: Brand.muted, fontSize: 13),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -394,49 +350,47 @@ class _BigToggleButton extends StatelessWidget {
   }
 }
 
-class _BaseBigButton extends StatelessWidget {
+/// The settled state of the Collect button: a full-width green-washed capsule
+/// with a check, tappable to undo. Same 44 pt minimum and press state as
+/// [AppButton]; only the colours are the paid ones.
+class _PaidCapsule extends StatelessWidget {
+  final String label;
   final VoidCallback onTap;
-  final Widget child;
-  final Color? bg;
-  final Gradient? gradient;
-  final Color border;
-  final bool glow;
-  const _BaseBigButton({
-    required this.onTap,
-    required this.child,
-    required this.border,
-    this.bg,
-    this.gradient,
-    this.glow = false,
-  });
+  const _PaidCapsule({required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(15),
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 15),
-            decoration: BoxDecoration(
-              color: bg,
-              gradient: gradient,
-              borderRadius: BorderRadius.circular(15),
-              border: Border.all(color: border),
-              boxShadow: glow
-                  ? [
-                      BoxShadow(
-                        color: Brand.orange.withValues(alpha: 0.45),
-                        blurRadius: 26,
-                        offset: const Offset(0, 8),
-                      )
-                    ]
-                  : null,
+    final sys = Sys.of(context);
+    return Pressable(
+      child: SizedBox(
+        width: double.infinity,
+        child: Material(
+          color: Sys.wash(sys.green),
+          shape: const StadiumBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            customBorder: const StadiumBorder(),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: Sys.minTapTarget),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.check, size: 18, color: sys.greenText),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Type.body.semibold.colored(sys.greenText)),
+                    ),
+                  ],
+                ),
+              ),
             ),
-            child: Center(child: child),
           ),
         ),
       ),
@@ -517,19 +471,19 @@ class _HistoryCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     return Column(
       children: [
         _HistoryChip(entry: entry),
         const SizedBox(height: 6),
         Text(BsMonth(entry.year, entry.month).shortMonthNameIn(mode),
-            style: const TextStyle(
-                fontSize: 11, color: Brand.muted, fontWeight: FontWeight.w600)),
+            style: Type.caption2.colored(sys.secondaryLabel)),
       ],
     );
   }
 }
 
-/// Status chip: full = solid green + check, partial = green filled from the
+/// Status chip: full = green wash + check, partial = green filled from the
 /// left in proportion to the fraction paid, unpaid = faint with a dash.
 class _HistoryChip extends StatelessWidget {
   final HistoryEntry entry;
@@ -540,16 +494,17 @@ class _HistoryChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     if (entry.isPaid) {
       return Container(
         width: _size,
         height: _size,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: Brand.paid.withValues(alpha: 0.95),
+          color: Sys.wash(sys.green),
           borderRadius: _radius,
         ),
-        child: const Icon(Icons.check, size: 14, color: Color(0xFF053026)),
+        child: Icon(Icons.check, size: 16, color: sys.greenText),
       );
     }
     if (entry.isPartial) {
@@ -560,25 +515,14 @@ class _HistoryChip extends StatelessWidget {
           borderRadius: _radius,
           child: Stack(
             children: [
-              Positioned.fill(
-                child: ColoredBox(color: Colors.white.withValues(alpha: 0.07)),
-              ),
+              Positioned.fill(child: ColoredBox(color: sys.fill)),
               // Green fill from the left, proportional to the fraction paid.
               Align(
                 alignment: Alignment.centerLeft,
                 child: FractionallySizedBox(
                   widthFactor: entry.progress,
                   heightFactor: 1,
-                  child: ColoredBox(color: Brand.paid.withValues(alpha: 0.85)),
-                ),
-              ),
-              const Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: _radius,
-                    border: Border.fromBorderSide(
-                        BorderSide(color: Brand.glassBorder)),
-                  ),
+                  child: ColoredBox(color: sys.green),
                 ),
               ),
             ],
@@ -592,12 +536,11 @@ class _HistoryChip extends StatelessWidget {
       height: _size,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.07),
+        color: sys.fill,
         borderRadius: _radius,
-        border: Border.all(color: Brand.glassBorder),
       ),
-      child: const Text('–',
-          style: TextStyle(color: Brand.muted, fontWeight: FontWeight.w700)),
+      child: Text('–',
+          style: Type.subhead.semibold.colored(sys.secondaryLabel)),
     );
   }
 }
@@ -617,57 +560,37 @@ class _DetailCell extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) {
-    final cell = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: Brand.glassBg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Brand.glassBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 11.5,
-                  color: Brand.muted,
-                  fontWeight: FontWeight.w600)),
-          const SizedBox(height: 3),
-          Row(
-            children: [
-              if (icon != null) ...[
-                Icon(icon, size: 13, color: Brand.text),
-                const SizedBox(width: 5),
-              ],
-              Flexible(
-                child: Text(value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: display(
-                        fontSize: icon != null ? 15 : 18,
-                        fontWeight: FontWeight.w600,
-                        fontFeatures: tabularNums)),
-              ),
-              if (trailingIcon != null) ...[
-                const SizedBox(width: 6),
-                Icon(trailingIcon, size: 15, color: Brand.orange),
-              ],
-            ],
-          ),
-        ],
-      ),
-    );
+    final sys = Sys.of(context);
     return Expanded(
-      child: onTap == null
-          ? cell
-          : Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: onTap,
-                borderRadius: BorderRadius.circular(14),
-                child: cell,
-              ),
+      child: Well(
+        onTap: onTap,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: Type.caption1.colored(sys.secondaryLabel)),
+            const SizedBox(height: 3),
+            Row(
+              children: [
+                if (icon != null) ...[
+                  Icon(icon, size: 14, color: sys.secondaryLabel),
+                  const SizedBox(width: 5),
+                ],
+                Flexible(
+                  child: Text(value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Type.body.semibold.colored(sys.label).tabular),
+                ),
+                if (trailingIcon != null) ...[
+                  const SizedBox(width: 6),
+                  Icon(trailingIcon, size: 16, color: sys.tintText),
+                ],
+              ],
             ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -675,15 +598,23 @@ class _DetailCell extends StatelessWidget {
 class _IconBtn extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
-  const _IconBtn({required this.icon, required this.onTap});
+  final bool destructive;
+  const _IconBtn(
+      {required this.icon, required this.onTap, this.destructive = false});
   @override
   Widget build(BuildContext context) {
-    return GlassPanel(
-      padding: EdgeInsets.zero,
-      borderRadius: BorderRadius.circular(12),
+    final sys = Sys.of(context);
+    // Drawn at 36 pt; TapTarget pads the hit area out to the HIG's 44 pt.
+    return TapTarget(
       onTap: onTap,
-      child: SizedBox(
-          width: 38, height: 38, child: Icon(icon, size: 16, color: Brand.text)),
+      child: Well(
+        padding: EdgeInsets.zero,
+        child: SizedBox.square(
+          dimension: 36,
+          child: Icon(icon,
+              size: 18, color: destructive ? sys.redText : sys.label),
+        ),
+      ),
     );
   }
 }

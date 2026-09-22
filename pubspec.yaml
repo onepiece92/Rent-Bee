@@ -109,15 +109,8 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # Bundled fonts (variable TTFs) so the app renders fully offline —
-  # no runtime download. Fraunces = display, Hanken Grotesk = UI/body.
-  fonts:
-    - family: Fraunces
-      fonts:
-        - asset: assets/fonts/Fraunces.ttf
-    - family: HankenGrotesk
-      fonts:
-        - asset: assets/fonts/HankenGrotesk.ttf
+  # No bundled typeface: the UI uses the platform's system font (SF on Apple
+  # devices, per the HIG), so nothing is downloaded or shipped.
 
   assets:
     - assets/icon/rent_bee.png

@@ -29,6 +29,9 @@ import 'package:unit_ledger/state/settings_provider.dart';
 ///
 /// Skipped in normal runs: goldens here are marketing output, not assertions,
 /// so a deliberate UI change must never fail the suite.
+/// Family name the loaded SF file is registered under (see `setUpAll`).
+const shotFontFamily = 'SF';
+
 void main() {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
 
@@ -54,8 +57,10 @@ void main() {
             .parent
             .path;
 
-    await load('Fraunces', 'assets/fonts/Fraunces.ttf');
-    await load('HankenGrotesk', 'assets/fonts/HankenGrotesk.ttf');
+    // The app uses the platform's system font (SF). The renders load the
+    // Mac's own San Francisco file under the family the app is told to use,
+    // so store shots show the real typeface an iPhone would.
+    await load(shotFontFamily, '/System/Library/Fonts/SFNS.ttf');
     await load('MaterialIcons',
         '$flutterRoot/bin/cache/artifacts/material_fonts/materialicons-regular.otf');
   });
@@ -130,7 +135,11 @@ void main() {
     addTearDown(t.view.resetDevicePixelRatio);
 
     await t.pumpWidget(UnitLedgerApp(
-        auth: auth, settings: settings, repo: repo, prefs: prefs));
+        auth: auth,
+        settings: settings,
+        repo: repo,
+        prefs: prefs,
+        fontFamily: shotFontFamily));
     await t.pump();
     await t.pump(const Duration(milliseconds: 100));
     auth.enterGuestMode();
@@ -186,8 +195,9 @@ void main() {
       testWidgets('04 add unit', (t) async {
         await seed();
         await boot(t, pixels, dpr);
-        // Centre FAB in the nav bar; at this point 'Add Unit' is unambiguous
-        // (the sheet's save button with the same label isn't mounted yet).
+        // The Ledger header's 'Add Unit' action; at this point the label is
+        // unambiguous (the sheet's save button with the same label isn't
+        // mounted yet).
         await t.tap(find.text('Add Unit'));
         await settle(t, 16);
         await shot(t, device, '04_add_unit');

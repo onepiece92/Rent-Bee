@@ -11,7 +11,9 @@ import '../../domain/phone.dart';
 import '../../domain/unit_code.dart';
 import '../../state/ledger_provider.dart';
 import '../../state/settings_provider.dart';
+import '../widgets/glass.dart';
 import '../widgets/sheet_scaffold.dart';
+import '../widgets/tap_target.dart';
 import '../widgets/toast.dart';
 
 /// Bottom sheet to add a new unit or edit an existing one.
@@ -20,7 +22,7 @@ class EditUnitSheet extends StatefulWidget {
   const EditUnitSheet({super.key, this.unit});
 
   static Future<void> show(BuildContext context, {Unit? unit}) {
-    return showGlassSheet(
+    return showSheet(
       context,
       (_) => EditUnitSheet(unit: unit),
     );
@@ -162,6 +164,7 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final settings = context.watch<SettingsProvider>();
     final mode = settings.calendar;
     final currencySymbol = settings.currency.symbol.trim();
@@ -173,7 +176,7 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
           Align(
             alignment: Alignment.centerLeft,
             child: Text(_isEdit ? 'Edit Unit' : 'New Unit',
-                style: display(fontSize: 22, fontWeight: FontWeight.w600)),
+                style: Type.title2.semibold.colored(sys.label)),
           ),
           const SizedBox(height: 18),
           _Field(
@@ -211,7 +214,7 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
                   },
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Expanded(
                 child: _Field(
                   controller: _phone,
@@ -225,8 +228,8 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
                   suffixIcon: IconButton(
                     tooltip: 'Pick from contacts',
                     visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.contact_phone_outlined,
-                        size: 18, color: Brand.orange),
+                    icon: Icon(Icons.contact_phone_outlined,
+                        size: 18, color: sys.tintText),
                     onPressed: _pickFromContacts,
                   ),
                 ),
@@ -248,72 +251,30 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
             keyboardType: TextInputType.number,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           ),
-          // Own Material so the tile's ink/background paints on it rather than
-          // being hidden by the glass sheet's coloured DecoratedBox.
-          Material(
-            type: MaterialType.transparency,
-            child: SwitchListTile(
-              value: _active,
-              onChanged: (v) => setState(() => _active = v),
-              activeThumbColor: Brand.orange,
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: const Text('Active (counts toward expected)',
-                  style: TextStyle(fontSize: 13, color: Brand.muted)),
-            ),
+          SwitchListTile.adaptive(
+            value: _active,
+            onChanged: (v) => setState(() => _active = v),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: Text('Active (counts toward expected)',
+                style: Type.footnote.colored(sys.secondaryLabel)),
           ),
           const SizedBox(height: 6),
-          _SaveButton(label: _isEdit ? 'Save changes' : 'Add Unit', onTap: _save),
+          AppButton(
+            label: _isEdit ? 'Save changes' : 'Add Unit',
+            onTap: _save,
+            kind: ButtonKind.prominent,
+            expand: true,
+          ),
         ],
       ),
     );
   }
 }
 
-class _SaveButton extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-  const _SaveButton({required this.label, required this.onTap});
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(15),
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 15),
-            decoration: BoxDecoration(
-              gradient: Brand.orangeGradient,
-              borderRadius: BorderRadius.circular(15),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
-              boxShadow: [
-                BoxShadow(
-                  color: Brand.orange.withValues(alpha: 0.45),
-                  blurRadius: 26,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Center(
-              child: Text(label,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.w700)),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// A labelled, tappable read-only field that opens a date picker. Mirrors the
-/// look of [_Field]. A null [value] shows the "Not set" hint; an optional clear
-/// affordance appears when a date is set.
+/// A labelled, tappable read-only well that opens a date picker. A null
+/// [value] shows the "Not set" placeholder; an optional clear affordance
+/// appears when a date is set.
 class _DateField extends StatelessWidget {
   final String label;
   final String? value;
@@ -328,55 +289,38 @@ class _DateField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     return Padding(
-      padding: const EdgeInsets.only(bottom: 13),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w600,
-                  color: Brand.muted)),
-          const SizedBox(height: 6),
-          InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-              decoration: BoxDecoration(
-                color: Brand.glassBg,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Brand.glassBorder),
-              ),
-              child: Row(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Well(
+        onTap: onTap,
+        padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+        child: Row(
+          children: [
+            Icon(Icons.event_outlined, size: 18, color: sys.secondaryLabel),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.event_outlined,
-                      size: 16, color: Brand.muted),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      value ?? 'Not set',
-                      style: TextStyle(
-                          fontSize: 15,
-                          color: value == null
-                              ? const Color(0x66FFFFFF)
-                              : Colors.white),
-                    ),
+                  Text(label,
+                      style: Type.caption1.colored(sys.secondaryLabel)),
+                  const SizedBox(height: 2),
+                  Text(
+                    value ?? 'Not set',
+                    style: Type.body.colored(
+                        value == null ? sys.tertiaryLabel : sys.label),
                   ),
-                  if (onClear != null)
-                    GestureDetector(
-                      onTap: onClear,
-                      behavior: HitTestBehavior.opaque,
-                      child: const Icon(Icons.close,
-                          size: 16, color: Brand.muted),
-                    ),
                 ],
               ),
             ),
-          ),
-        ],
+            if (onClear != null)
+              TapTarget(
+                onTap: onClear,
+                child: Icon(Icons.close, size: 18, color: sys.secondaryLabel),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -397,6 +341,8 @@ class _PhoneInputFormatter extends TextInputFormatter {
   }
 }
 
+/// A form field on the theme's input decoration (filled tertiarySystemFill,
+/// no border, 14 pt radius) with the label carried by `labelText`.
 class _Field extends StatelessWidget {
   final TextEditingController controller;
   final String label;
@@ -421,49 +367,21 @@ class _Field extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 13),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w600,
-                  color: Brand.muted)),
-          const SizedBox(height: 6),
-          TextFormField(
-            controller: controller,
-            autofocus: autofocus,
-            keyboardType: keyboardType,
-            inputFormatters: inputFormatters,
-            validator: validator,
-            style: const TextStyle(fontSize: 15, color: Colors.white),
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: hint,
-              hintStyle: const TextStyle(color: Color(0x66FFFFFF)),
-              suffixIcon: suffixIcon,
-              suffixIconConstraints:
-                  const BoxConstraints(minWidth: 40, minHeight: 40),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              filled: true,
-              fillColor: Brand.glassBg,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Brand.glassBorder),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Brand.glassBorder),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Brand.orange),
-              ),
-            ),
-          ),
-        ],
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TextFormField(
+        controller: controller,
+        autofocus: autofocus,
+        keyboardType: keyboardType,
+        inputFormatters: inputFormatters,
+        validator: validator,
+        decoration: InputDecoration(
+          isDense: true,
+          labelText: label,
+          hintText: hint,
+          suffixIcon: suffixIcon,
+          suffixIconConstraints:
+              const BoxConstraints(minWidth: 40, minHeight: 40),
+        ),
       ),
     );
   }

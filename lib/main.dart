@@ -52,7 +52,7 @@ class _StartupErrorApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
-        backgroundColor: const Color(0xFF0E1830),
+        backgroundColor: Sys.dark.bg,
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(20),
@@ -87,12 +87,17 @@ class UnitLedgerApp extends StatefulWidget {
   final LedgerRepository repo;
   final SharedPreferences prefs;
 
+  /// Test-only: a `FontLoader`-registered family for screenshot renders. The
+  /// app itself passes nothing and uses the system font.
+  final String? fontFamily;
+
   const UnitLedgerApp({
     super.key,
     required this.auth,
     required this.settings,
     required this.repo,
     required this.prefs,
+    this.fontFamily,
   });
 
   @override
@@ -216,11 +221,17 @@ class _UnitLedgerAppState extends State<UnitLedgerApp>
         ChangeNotifierProvider.value(value: _ledger),
         ChangeNotifierProvider.value(value: _syncStatus),
       ],
-      child: MaterialApp.router(
-        title: 'Rent Bee',
-        debugShowCheckedModeBanner: false,
-        theme: buildTheme(),
-        routerConfig: _router,
+      // Rebuilds only the MaterialApp when the Appearance setting changes.
+      child: ListenableBuilder(
+        listenable: _settings,
+        builder: (context, _) => MaterialApp.router(
+          title: 'Rent Bee',
+          debugShowCheckedModeBanner: false,
+          theme: buildTheme(Brightness.light, fontFamily: widget.fontFamily),
+          darkTheme: buildTheme(Brightness.dark, fontFamily: widget.fontFamily),
+          themeMode: _settings.appearance,
+          routerConfig: _router,
+        ),
       ),
     );
   }

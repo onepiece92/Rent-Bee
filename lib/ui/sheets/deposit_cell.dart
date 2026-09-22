@@ -7,10 +7,11 @@ import '../../domain/bs_calendar.dart';
 import '../../domain/money.dart';
 import '../../state/ledger_provider.dart';
 import '../../state/settings_provider.dart';
+import '../widgets/glass.dart';
 import '../widgets/glass_dialog.dart';
 
 /// Security-deposit cell: shows the held amount and whether it has been
-/// refunded, with a chip to flip between held and refunded. Hidden controls
+/// refunded, with a button to flip between held and refunded. Hidden controls
 /// when no deposit is on file (amount 0). Sits inside a `Row`.
 class DepositCell extends StatelessWidget {
   final Unit unit;
@@ -18,6 +19,7 @@ class DepositCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final ledger = context.read<LedgerProvider>();
     final settings = context.watch<SettingsProvider>();
     final mode = settings.calendar;
@@ -31,63 +33,44 @@ class DepositCell extends StatelessWidget {
             : 'Held';
 
     return Expanded(
-      child: Container(
+      child: Well(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: Brand.glassBg,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Brand.glassBorder),
-        ),
         child: Row(
           children: [
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Security deposit',
-                      style: TextStyle(
-                          fontSize: 11.5,
-                          color: Brand.muted,
-                          fontWeight: FontWeight.w600)),
+                  Text('Security deposit',
+                      style: Type.caption1.colored(sys.secondaryLabel)),
                   const SizedBox(height: 3),
                   Text(
                       has
                           ? Money.format(unit.depositAmount, currency)
                           : 'None',
-                      style: display(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          fontFeatures: tabularNums)),
+                      style: Type.body.semibold.colored(sys.label).tabular),
                   if (sub != null) ...[
-                    const SizedBox(height: 2),
-                    Text(sub,
-                        style: TextStyle(
-                            fontSize: 11.5,
-                            color: refunded ? Brand.muted : Brand.paidText,
-                            fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    // Held = green, refunded = neutral; the word carries the
+                    // status, the colour only reinforces it.
+                    StatusBadge(
+                      label: sub,
+                      color: refunded ? sys.secondaryLabel : sys.green,
+                      textColor: refunded ? sys.secondaryLabel : sys.greenText,
+                    ),
                   ],
                 ],
               ),
             ),
-            if (has)
-              InkWell(
+            if (has) ...[
+              const SizedBox(width: 8),
+              AppButton(
+                label: refunded ? 'Mark held' : 'Refund',
                 onTap: () => _toggle(context, ledger),
-                borderRadius: BorderRadius.circular(10),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Brand.glassBg,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Brand.glassBorder),
-                  ),
-                  child: Text(refunded ? 'Mark held' : 'Refund',
-                      style: const TextStyle(
-                          color: Brand.orangeSoft,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12)),
-                ),
+                kind: ButtonKind.tinted,
+                compact: true,
               ),
+            ],
           ],
         ),
       ),

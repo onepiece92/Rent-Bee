@@ -71,21 +71,29 @@ class _SponsoredCarouselState extends State<SponsoredCarousel> {
   /// the cadence restarts cleanly when the tab comes back.
   ValueListenable<TickerModeData>? _tickerMode;
 
+  /// iOS Reduce Motion: auto-advancing is movement the person didn't ask for,
+  /// so the timer stays off; they can still swipe.
+  bool _reduceMotion = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _reduceMotion = Motion.reduced(context);
     final notifier = TickerMode.getValuesNotifier(context);
-    if (identical(notifier, _tickerMode)) return;
-    _tickerMode?.removeListener(_syncTimer);
-    _tickerMode = notifier..addListener(_syncTimer);
+    if (!identical(notifier, _tickerMode)) {
+      _tickerMode?.removeListener(_syncTimer);
+      _tickerMode = notifier..addListener(_syncTimer);
+    }
     _syncTimer();
   }
 
   void _syncTimer() {
-    final enabled = _tickerMode?.value.enabled ?? true;
-    if (enabled && _timer == null && widget.sponsors.length > 1) {
+    final run = (_tickerMode?.value.enabled ?? true) &&
+        !_reduceMotion &&
+        widget.sponsors.length > 1;
+    if (run && _timer == null) {
       _timer = Timer.periodic(widget.interval, (_) => _advance());
-    } else if (!enabled) {
+    } else if (!run) {
       _timer?.cancel();
       _timer = null;
     }
@@ -97,7 +105,7 @@ class _SponsoredCarouselState extends State<SponsoredCarousel> {
     _controller.animateToPage(
       next,
       duration: const Duration(milliseconds: 450),
-      curve: Curves.easeInOut,
+      curve: Motion.move,
     );
   }
 
@@ -121,24 +129,20 @@ class _SponsoredCarouselState extends State<SponsoredCarousel> {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final sponsors = widget.sponsors;
     if (sponsors.isEmpty) return const SizedBox.shrink();
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 6, 18, 4),
+      padding: const EdgeInsets.fromLTRB(Sys.gutter, 6, Sys.gutter, 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.only(left: 4, bottom: 8),
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
             child: Text(
-              'SPONSORED',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1,
-                color: Brand.muted,
-              ),
+              'Sponsored',
+              style: Type.caption1.colored(sys.secondaryLabel),
             ),
           ),
           SizedBox(
@@ -163,13 +167,14 @@ class _SponsoredCarouselState extends State<SponsoredCarousel> {
               children: [
                 for (var i = 0; i < sponsors.length; i++)
                   AnimatedContainer(
-                    duration: const Duration(milliseconds: 250),
+                    duration: Motion.duration(context, Motion.moveDuration),
+                    curve: Motion.move,
                     margin: const EdgeInsets.symmetric(horizontal: 3),
                     width: i == _current ? 16 : 6,
                     height: 6,
                     decoration: BoxDecoration(
-                      color: i == _current ? Brand.orange : Brand.glassBorder,
-                      borderRadius: BorderRadius.circular(99),
+                      color: i == _current ? sys.tint : sys.fill,
+                      borderRadius: BorderRadius.circular(Sys.radiusCapsule),
                     ),
                   ),
               ],
@@ -188,23 +193,15 @@ class _SponsorCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassPanel.tile(
+    final sys = Sys.of(context);
+    return GroupedCard.tile(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(Sys.radiusWell),
       onTap: onTap,
       child: Row(
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              gradient: Brand.orangeGradient,
-              borderRadius: BorderRadius.circular(11),
-            ),
-            child: Icon(sponsor.icon, size: 19, color: Colors.white),
-          ),
-          const SizedBox(width: 13),
+          IconTile(icon: sponsor.icon, color: sys.tint, size: 36),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -214,22 +211,20 @@ class _SponsorCard extends StatelessWidget {
                   sponsor.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 14.5, fontWeight: FontWeight.w700),
+                  style: Type.subhead.semibold.colored(sys.label),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   sponsor.tagline,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Brand.muted, fontSize: 12),
+                  style: Type.footnote.colored(sys.secondaryLabel),
                 ),
               ],
             ),
           ),
           const SizedBox(width: 8),
-          const Icon(Icons.open_in_new_rounded,
-              size: 16, color: Brand.orangeSoft),
+          Icon(Icons.open_in_new_rounded, size: 16, color: sys.tintText),
         ],
       ),
     );

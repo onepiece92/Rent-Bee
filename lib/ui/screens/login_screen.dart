@@ -64,35 +64,35 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final auth = context.watch<AuthProvider>();
 
     return Scaffold(
-      body: BrandBackground(
+      body: PageBackground(
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(Sys.gutter),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 380),
-                child: GlassPanel(
-                  padding: const EdgeInsets.all(28),
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: GroupedCard(
+                  padding: const EdgeInsets.all(24),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Icon(Icons.storefront_rounded,
-                          color: Brand.orange, size: 44),
-                      const SizedBox(height: 14),
+                      const _AppIcon(),
+                      const SizedBox(height: 16),
                       Text(
                         'Rent Bee',
                         textAlign: TextAlign.center,
-                        style: display(fontSize: 30, fontWeight: FontWeight.w600),
+                        style: Type.title1.bold.colored(sys.label),
                       ),
                       const SizedBox(height: 6),
-                      const Text(
+                      Text(
                         'Enter your PIN to continue',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Brand.muted),
+                        style: Type.subhead.colored(sys.secondaryLabel),
                       ),
                       const SizedBox(height: 24),
                       PinField(
@@ -104,20 +104,15 @@ class _LoginScreenState extends State<LoginScreen> {
                       if (_error != null) ...[
                         const SizedBox(height: 12),
                         Text(_error!,
-                            style: const TextStyle(color: Colors.redAccent)),
+                            textAlign: TextAlign.center,
+                            style: Type.footnote.colored(sys.redText)),
                       ],
-                      const SizedBox(height: 22),
+                      const SizedBox(height: 24),
+                      // Stays a FilledButton: the theme renders it as the
+                      // prominent capsule, and the widget tests find it by type.
                       FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Brand.orange,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                        ),
                         onPressed: _busy ? null : () => _submit(auth),
-                        child: const Text('Unlock',
-                            style: TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.w600)),
+                        child: const Text('Unlock'),
                       ),
                     ],
                   ),
@@ -125,6 +120,34 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The app icon at 72 pt with 16 pt corners, centred above the title.
+class _AppIcon extends StatelessWidget {
+  const _AppIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    final sys = Sys.of(context);
+    return Center(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Image.asset(
+          'assets/icon/rent_bee.png',
+          width: 72,
+          height: 72,
+          // Source is 512² — decode to ~2x the display size, not full.
+          cacheWidth: 144,
+          cacheHeight: 144,
+          fit: BoxFit.cover,
+          // The title text below carries the name.
+          excludeFromSemantics: true,
+          errorBuilder: (_, _, _) =>
+              Icon(Icons.apartment_rounded, size: 48, color: sys.tint),
         ),
       ),
     );

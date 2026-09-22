@@ -13,6 +13,7 @@ import '../util/sms_reminder.dart';
 import '../widgets/glass.dart';
 import '../widgets/sponsored_carousel.dart';
 import '../widgets/sync_badge.dart';
+import '../widgets/tap_target.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -31,12 +32,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     return SafeArea(
       bottom: false,
       child: RefreshIndicator(
         onRefresh: () => context.read<LedgerProvider>().refresh(),
-        color: Brand.orange,
-        backgroundColor: Brand.navy,
+        color: sys.tint,
+        backgroundColor: sys.card,
         child: CustomScrollView(
           // Stay scrollable even when content is short, so pull-to-refresh
           // works on an empty ledger.
@@ -64,6 +66,7 @@ class _HomeScreenState extends State<HomeScreen> {
             // refresh rebuild only this region.
             Consumer<LedgerProvider>(
               builder: (context, ledger, _) {
+                final sys = Sys.of(context);
                 if (ledger.loading) {
                   return const SliverToBoxAdapter(
                     child: Padding(
@@ -78,12 +81,25 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: _Empty(noUnits: ledger.totalCount == 0),
                   );
                 }
+                // One grouped card of rows: the card colour is painted behind
+                // the lazy sliver, so a long ledger still builds on demand.
                 return SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
-                  sliver: SliverList.separated(
-                    itemCount: rows.length,
-                    separatorBuilder: (_, i) => const SizedBox(height: 9),
-                    itemBuilder: (context, i) => _UnitTile(row: rows[i]),
+                  padding:
+                      const EdgeInsets.fromLTRB(Sys.gutter, 8, Sys.gutter, 10),
+                  sliver: DecoratedSliver(
+                    decoration: BoxDecoration(
+                      color: sys.card,
+                      borderRadius: BorderRadius.circular(Sys.radiusCard),
+                    ),
+                    sliver: SliverList.separated(
+                      itemCount: rows.length,
+                      separatorBuilder: (_, _) =>
+                          const Hairline(inset: 16 + 44 + 12),
+                      itemBuilder: (context, i) => _UnitTile(
+                        row: rows[i],
+                        borderRadius: _rowRadius(i, rows.length),
+                      ),
+                    ),
                   ),
                 );
               },
@@ -98,12 +114,21 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+/// Ink shape for a row of the grouped list: the first and last rows follow the
+/// card's rounded corners so a press never paints outside them.
+BorderRadius _rowRadius(int i, int count) => BorderRadius.vertical(
+      top: i == 0 ? const Radius.circular(Sys.radiusCard) : Radius.zero,
+      bottom:
+          i == count - 1 ? const Radius.circular(Sys.radiusCard) : Radius.zero,
+    );
+
 class _Header extends StatelessWidget {
   final BsMonth month;
   const _Header({required this.month});
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final mode = context.watch<SettingsProvider>().calendar;
     // Nav callbacks only — read (not watch) so the header rebuilds solely on
     // the `month` the parent Selector feeds it.
@@ -112,43 +137,72 @@ class _Header extends StatelessWidget {
     final today = bsYearMonth(DateTime.now());
     final currentMonth = BsMonth(today.year, today.month);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
+      padding: const EdgeInsets.fromLTRB(Sys.gutter, 14, Sys.gutter, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Large Title row: the selected month, with the month arrows and the
+          // primary action as toolbar buttons at the trailing end.
           Row(
             children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(9),
-                child: Image.asset(
-                  'assets/icon/rent_bee.png',
-                  width: 28,
-                  height: 28,
-                  // Source is 512² — decode to ~2x the display size, not full.
-                  cacheWidth: 56,
-                  cacheHeight: 56,
-                  fit: BoxFit.cover,
-                ),
-              ),
-              const SizedBox(width: 9),
-              // Expanded (not Spacer) so the title yields gracefully when the
-              // badge + chip need the room, instead of overflowing the Row.
-              const Expanded(
-                child: Text(
-                  'Rent Bee',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.2,
+              // Long month names ("September", "Baishakh") scale down rather
+              // than truncate when the toolbar needs the room.
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    month.monthNameIn(mode),
+                    maxLines: 1,
+                    style: Type.largeTitle.colored(sys.label),
                   ),
                 ),
               ),
-              // Cloud-sync state (hidden when not signed in / local-only).
-              const SyncBadge(),
-              const SizedBox(width: 10),
-              // Today's date — tap to jump back to the current month.
+              const SizedBox(width: 8),
+              GlassIconButton(
+                icon: Icons.chevron_left,
+                semanticLabel: 'Previous month',
+                onTap: ledger.previousMonth,
+              ),
+              const SizedBox(width: 6),
+              GlassIconButton(
+                icon: Icons.chevron_right,
+                semanticLabel: 'Next month',
+                onTap: ledger.nextMonth,
+              ),
+              const SizedBox(width: 8),
+              AppButton(
+                label: 'Add Unit',
+                icon: Icons.add,
+                kind: ButtonKind.prominentGlass,
+                compact: true,
+                onTap: () => EditUnitSheet.show(context),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          // Subhead: the year in the active calendar and the app name, the
+          // cloud-sync state (hidden when not signed in / local-only), and
+          // today's date — tap to jump back to the current month.
+          Row(
+            children: [
+              Expanded(
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        '${month.yearIn(mode)} · Rent Bee',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Type.subhead.colored(sys.secondaryLabel).tabular,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const SyncBadge(),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
               _TodayChip(
                 mode: mode,
                 isCurrent: month == currentMonth,
@@ -156,49 +210,15 @@ class _Header extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          // Month switcher as a full-width glass nav bar.
-          GlassPanel(
-            padding: const EdgeInsets.all(6),
-            borderRadius: BorderRadius.circular(16),
-            child: Row(
-              children: [
-                _NavBtn(icon: Icons.chevron_left, onTap: ledger.previousMonth),
-                Expanded(
-                  child: Column(
-                    children: [
-                      Text(
-                        month.monthNameIn(mode),
-                        style: display(
-                          fontSize: 19,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      Text(
-                        '${month.yearIn(mode)}',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Brand.muted,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 0.6,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                _NavBtn(icon: Icons.chevron_right, onTap: ledger.nextMonth),
-              ],
-            ),
-          ),
         ],
       ),
     );
   }
 }
 
-/// Small pill in the header showing today's date in the active calendar.
+/// Small chip in the header showing today's date in the active calendar.
 /// Tapping it jumps the ledger back to the current month; when the selected
-/// month differs from today, the pill takes an orange "return to today" accent.
+/// month differs from today, the chip takes the tinted "return to today" look.
 class _TodayChip extends StatelessWidget {
   final CalendarMode mode;
   final bool isCurrent;
@@ -212,61 +232,12 @@ class _TodayChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = !isCurrent; // viewing another month → actionable accent
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(99),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(
-            color: accent
-                ? Brand.orange.withValues(alpha: 0.16)
-                : Colors.white.withValues(alpha: 0.07),
-            borderRadius: BorderRadius.circular(99),
-            border: Border.all(
-              color: accent
-                  ? Brand.orange.withValues(alpha: 0.5)
-                  : Brand.glassBorder,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(accent ? Icons.undo_rounded : Icons.today,
-                  size: 13,
-                  color: accent ? Brand.orangeWarm : Brand.orangeSoft),
-              const SizedBox(width: 5),
-              Text(
-                todayLabel(mode),
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  color: accent ? Brand.orangeWarm : Brand.text,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _NavBtn extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  const _NavBtn({required this.icon, required this.onTap});
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
+    return AppButton(
+      label: todayLabel(mode),
+      icon: accent ? Icons.undo_rounded : Icons.today,
+      kind: accent ? ButtonKind.tinted : ButtonKind.plain,
+      compact: true,
       onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
-      child: SizedBox(
-        width: 40,
-        height: 40,
-        child: Icon(icon, size: 20, color: Brand.text),
-      ),
     );
   }
 }
@@ -277,65 +248,55 @@ class _SummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final currency = context.watch<SettingsProvider>().currency;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
-      child: GlassPanel(
-        sheen: true,
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+      padding: const EdgeInsets.fromLTRB(Sys.gutter, 8, Sys.gutter, 8),
+      child: GroupedCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'Collected this month',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    color: Brand.muted,
-                    fontWeight: FontWeight.w500,
+                Expanded(
+                  child: Text(
+                    'Collected this month',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Type.title3.semibold.colored(sys.label),
                   ),
                 ),
+                const SizedBox(width: 8),
                 Text(
                   '${summary.percent}%',
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                    color: Brand.orangeWarm,
-                  ),
+                  style: Type.subhead.semibold.colored(sys.tintText).tabular,
                 ),
               ],
             ),
             const SizedBox(height: 6),
             Text(
               Money.format(summary.collected, currency),
-              style: display(
-                fontSize: 37,
-                fontWeight: FontWeight.w600,
-                letterSpacing: -0.7,
-                fontFeatures: tabularNums,
-              ),
+              style: Type.largeTitle.tabular.colored(sys.label),
             ),
-            const SizedBox(height: 1),
+            const SizedBox(height: 2),
             Text(
               'of ${Money.format(summary.expected, currency)} expected',
-              style: const TextStyle(fontSize: 12.5, color: Color(0xB3E2E6FF)),
+              style: Type.footnote.colored(sys.secondaryLabel).tabular,
             ),
             const SizedBox(height: 14),
-            BrandProgressBar(value: summary.progress),
+            ProgressBar(value: summary.progress),
             const SizedBox(height: 14),
             Row(
               children: [
                 _StatChip(
                   icon: Icons.check_circle,
-                  iconColor: Brand.paidText,
+                  iconColor: sys.greenText,
                   child: Text.rich(
                     TextSpan(
                       children: [
                         TextSpan(
                           text: '${summary.paidCount}',
-                          style: const TextStyle(fontWeight: FontWeight.w700),
+                          style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                         TextSpan(text: '/${summary.activeCount} paid'),
                       ],
@@ -345,16 +306,13 @@ class _SummaryCard extends StatelessWidget {
                 const SizedBox(width: 10),
                 _StatChip(
                   icon: Icons.schedule,
-                  iconColor: Brand.orangeWarm,
+                  iconColor: sys.orangeText,
                   child: Text.rich(
                     TextSpan(
                       children: [
                         TextSpan(
                           text: Money.format(summary.pending, currency),
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontFeatures: tabularNums,
-                          ),
+                          style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                         const TextSpan(text: ' pending'),
                       ],
@@ -370,6 +328,8 @@ class _SummaryCard extends StatelessWidget {
   }
 }
 
+/// One of the two stat wells under the progress bar: an icon in a status
+/// colour and a footnote line.
 class _StatChip extends StatelessWidget {
   final IconData icon;
   final Color iconColor;
@@ -381,21 +341,17 @@ class _StatChip extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-        ),
+      child: Well(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
           children: [
-            Icon(icon, size: 14, color: iconColor),
+            Icon(icon, size: 16, color: iconColor),
             const SizedBox(width: 6),
             Flexible(
               child: DefaultTextStyle.merge(
-                style: const TextStyle(fontSize: 12.5, color: Brand.text),
+                style: Type.footnote.colored(sys.label).tabular,
                 child: child,
               ),
             ),
@@ -412,71 +368,68 @@ class _SearchAndFilter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     // Scoped to its own widget so the query/filter watch rebuilds only this
     // bar, not the header or summary above.
     final ledger = context.watch<LedgerProvider>();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
+      padding: const EdgeInsets.fromLTRB(Sys.gutter, 8, Sys.gutter, 8),
       child: Column(
         children: [
-          GlassPanel(
-            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
-            borderRadius: BorderRadius.circular(14),
+          // Search capsule (kit): tertiarySystemFill, no border, 16 pt text.
+          Container(
+            constraints: const BoxConstraints(minHeight: Sys.minTapTarget),
+            padding: const EdgeInsets.only(left: 14, right: 4),
+            decoration: BoxDecoration(
+              color: sys.tertiaryFill,
+              borderRadius: BorderRadius.circular(Sys.radiusCapsule),
+            ),
             child: Row(
               children: [
-                const Icon(Icons.search, size: 16, color: Brand.muted),
-                const SizedBox(width: 9),
+                Icon(Icons.search, size: 18, color: sys.secondaryLabel),
+                const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
                     controller: controller,
                     onChanged: ledger.setQuery,
-                    style: const TextStyle(fontSize: 14.5, color: Brand.text),
-                    decoration: const InputDecoration(
+                    style: Type.callout.colored(sys.label),
+                    decoration: InputDecoration(
                       isDense: true,
-                      // The search box already sits in a GlassPanel — opt out of
-                      // the global filled glass field background.
+                      // The capsule already carries the fill — opt out of the
+                      // theme's filled field background and borders.
                       filled: false,
                       border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 11),
                       hintText: 'Search tenant or unit…',
-                      hintStyle: TextStyle(
-                        color: Color(0x66FFFFFF),
-                        fontSize: 14.5,
-                      ),
+                      hintStyle: Type.callout.colored(sys.tertiaryLabel),
                     ),
                   ),
                 ),
                 if (ledger.query.isNotEmpty)
-                  InkWell(
+                  TapTarget(
                     onTap: () {
                       controller.clear();
                       ledger.setQuery('');
                     },
-                    child: const Icon(
-                      Icons.close,
-                      size: 15,
-                      color: Brand.muted,
-                    ),
-                  ),
+                    child: Icon(Icons.close, size: 18, color: sys.secondaryLabel),
+                  )
+                else
+                  const SizedBox(width: 10),
               ],
             ),
           ),
-          const SizedBox(height: 11),
-          Row(
-            children: [
-              for (final f in LedgerFilter.values)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: _FilterChip(
-                    label: switch (f) {
-                      LedgerFilter.all => 'All',
-                      LedgerFilter.pending => 'Pending',
-                      LedgerFilter.paid => 'Paid',
-                    },
-                    selected: ledger.filter == f,
-                    onTap: () => ledger.setFilter(f),
-                  ),
-                ),
-            ],
+          const SizedBox(height: 12),
+          SegmentedControl<LedgerFilter>(
+            values: LedgerFilter.values,
+            selected: ledger.filter,
+            label: (f) => switch (f) {
+              LedgerFilter.all => 'All',
+              LedgerFilter.pending => 'Pending',
+              LedgerFilter.paid => 'Paid',
+            },
+            onChanged: ledger.setFilter,
           ),
         ],
       ),
@@ -484,160 +437,128 @@ class _SearchAndFilter extends StatelessWidget {
   }
 }
 
-class _FilterChip extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _FilterChip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(99),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected ? Brand.orange : Brand.glassBg,
-          borderRadius: BorderRadius.circular(99),
-          border: Border.all(
-            color: selected ? const Color(0xB3FF9A4D) : Brand.glassBorder,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? Colors.white : const Color(0xB3FFFFFF),
-            fontWeight: FontWeight.w600,
-            fontSize: 13,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
+/// One row of the ledger's grouped card: avatar, tenant, what's due and the
+/// row's actions. Tap anywhere on the row for the unit's detail sheet.
 class _UnitTile extends StatelessWidget {
   final UnitRow row;
-  const _UnitTile({required this.row});
+  final BorderRadius borderRadius;
+  const _UnitTile({required this.row, required this.borderRadius});
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     final s = row.unit;
     final paid = row.isPaid;
     final currency = context.watch<SettingsProvider>().currency;
-    return GlassPanel.tile(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-      borderRadius: BorderRadius.circular(18),
-      onTap: () => UnitDetailSheet.show(context, s.id),
-      child: Row(
-        children: [
-          CodeAvatar(code: s.code, paid: paid),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    // A transparent Material of its own, so the press ink paints above the
+    // card colour that DecoratedSliver draws behind the list.
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => UnitDetailSheet.show(context, s.id),
+        borderRadius: borderRadius,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: Sys.minTapTarget),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+                horizontal: Sys.gutter, vertical: 12),
+            child: Row(
               children: [
-                Text(
-                  s.tenantName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: -0.1,
+                CodeAvatar(code: s.code, paid: paid),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        s.tenantName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Type.body.semibold.colored(sys.label),
+                      ),
+                      Text(
+                        s.businessType.isEmpty ? '—' : s.businessType,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Type.footnote.colored(sys.secondaryLabel),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 1),
-                Text(
-                  s.businessType.isEmpty ? '—' : s.businessType,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Brand.muted, fontSize: 12.5),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    // What's due this month — rent plus utility charges, less
+                    // any deduction for goods taken from the shop — so the row
+                    // matches the Collect action.
+                    Text(
+                      Money.format(row.totalDue, currency),
+                      style: Type.subhead.semibold.tabular.colored(sys.label),
+                    ),
+                    if (row.charges > 0 || row.deduction > 0)
+                      Text(
+                        [
+                          if (row.charges > 0)
+                            '+ ${Money.format(row.charges, currency)} charges',
+                          if (row.deduction > 0)
+                            '− ${Money.format(row.deduction, currency)} deducted',
+                        ].join(' · '),
+                        style:
+                            Type.caption2.colored(sys.secondaryLabel).tabular,
+                      ),
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // A vacated unit is display-only: no rent reminder to
+                        // a former tenant, no mark-paid — just a Vacant badge.
+                        // (Late back-payments can still be recorded from the
+                        // detail sheet.)
+                        if (!s.isActive)
+                          const _VacantPill()
+                        else ...[
+                          // Quick rent reminder — only when a phone is on file.
+                          if (s.phone != null && s.phone!.isNotEmpty) ...[
+                            _CardSmsButton(
+                              onTap: () => sendRentReminder(
+                                context,
+                                s,
+                                context.read<LedgerProvider>().month,
+                                paid: paid,
+                                amount: row.totalDue,
+                                currency: currency,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                          switch (row.status) {
+                            PayStatus.paid => const StatusPill(paid: true),
+                            PayStatus.partial => _PartialPill(
+                                remaining: row.remaining, currency: currency),
+                            // Nothing to collect (rent not set) → no pill.
+                            PayStatus.pending when row.totalDue == 0 =>
+                              const SizedBox.shrink(),
+                            PayStatus.pending => _MarkPaidPill(
+                              onTap: () =>
+                                  context.read<LedgerProvider>().markPaid(s),
+                            ),
+                          },
+                        ],
+                      ],
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              // What's due this month — rent plus utility charges, less any
-              // deduction for goods taken from the shop — so the card matches
-              // the Collect action.
-              Text(
-                Money.format(row.totalDue, currency),
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: tabularNums,
-                ),
-              ),
-              if (row.charges > 0 || row.deduction > 0)
-                Text(
-                  [
-                    if (row.charges > 0)
-                      '+ ${Money.format(row.charges, currency)} charges',
-                    if (row.deduction > 0)
-                      '− ${Money.format(row.deduction, currency)} deducted',
-                  ].join(' · '),
-                  style: const TextStyle(
-                    color: Brand.muted,
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              const SizedBox(height: 6),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // A vacated unit is display-only: no rent reminder to a
-                  // former tenant, no mark-paid — just a Vacant badge. (Late
-                  // back-payments can still be recorded from the detail sheet.)
-                  if (!s.isActive)
-                    const _VacantPill()
-                  else ...[
-                    // Quick rent reminder — only when a phone is on file.
-                    if (s.phone != null && s.phone!.isNotEmpty) ...[
-                      _CardSmsButton(
-                        onTap: () => sendRentReminder(
-                          context,
-                          s,
-                          context.read<LedgerProvider>().month,
-                          paid: paid,
-                          amount: row.totalDue,
-                          currency: currency,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                    switch (row.status) {
-                      PayStatus.paid => const StatusPill(paid: true),
-                      PayStatus.partial => _PartialPill(
-                          remaining: row.remaining, currency: currency),
-                      // Nothing to collect (rent not set) → no pill at all.
-                      PayStatus.pending when row.totalDue == 0 =>
-                        const SizedBox.shrink(),
-                      PayStatus.pending => _MarkPaidPill(
-                        onTap: () => context.read<LedgerProvider>().markPaid(s),
-                      ),
-                    },
-                  ],
-                ],
-              ),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-/// Compact SMS-reminder button on a unit card. Its own tap target, so it fires
+/// Compact SMS-reminder button on a unit row. Its own tap target, so it fires
 /// the reminder without opening the detail sheet behind it.
 class _CardSmsButton extends StatelessWidget {
   final VoidCallback onTap;
@@ -645,118 +566,66 @@ class _CardSmsButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(9),
-        child: Container(
-          width: 30,
-          height: 30,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: Brand.glassBg,
-            borderRadius: BorderRadius.circular(9),
-            border: Border.all(color: Brand.glassBorder),
-          ),
-          child: const Icon(Icons.sms_outlined,
-              size: 15, color: Brand.orangeSoft),
+    final sys = Sys.of(context);
+    // Drawn at 30 pt; TapTarget pads the hit area out to the HIG's 44 pt.
+    return TapTarget(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 30,
+        height: 30,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: sys.well,
+          borderRadius: BorderRadius.circular(9),
         ),
+        child: Icon(Icons.sms_outlined, size: 16, color: sys.tintText),
       ),
     );
   }
 }
 
-/// Muted chip marking a vacated unit — visible for reference, no actions.
+/// Muted badge marking a vacated unit — visible for reference, no actions.
 class _VacantPill extends StatelessWidget {
   const _VacantPill();
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: Brand.glassBorder),
-      ),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.meeting_room_outlined, size: 12, color: Brand.muted),
-          SizedBox(width: 4),
-          Text(
-            'Vacant',
-            style: TextStyle(
-              color: Brand.muted,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
+    final sys = Sys.of(context);
+    return StatusBadge(
+      label: 'Vacant',
+      color: sys.secondaryLabel,
+      textColor: sys.secondaryLabel,
     );
   }
 }
 
-/// Amber chip for a partially-paid unit, showing the remaining balance.
+/// Orange badge for a partially-paid unit, showing the remaining balance.
 class _PartialPill extends StatelessWidget {
   final int remaining;
   final Currency currency;
   const _PartialPill({required this.remaining, required this.currency});
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
-      decoration: BoxDecoration(
-        color: Brand.orangeWarm.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: Brand.orangeWarm.withValues(alpha: 0.5)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.timelapse, size: 12, color: Brand.orangeWarm),
-          const SizedBox(width: 4),
-          Text(
-            '${Money.format(remaining, currency)} left',
-            style: const TextStyle(
-              color: Brand.orangeWarm,
-              fontWeight: FontWeight.w700,
-              fontSize: 11.5,
-              fontFeatures: tabularNums,
-            ),
-          ),
-        ],
-      ),
+    final sys = Sys.of(context);
+    return StatusBadge(
+      label: '${Money.format(remaining, currency)} left',
+      color: sys.orange,
+      textColor: sys.orangeText,
     );
   }
 }
 
-/// "Mark paid" pill = dimmed translucent orange (softer than solid CTAs).
+/// "Mark paid" as a compact tinted button — secondary to the row itself.
 class _MarkPaidPill extends StatelessWidget {
   final VoidCallback onTap;
   const _MarkPaidPill({required this.onTap});
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return AppButton(
+      label: 'Mark paid',
+      kind: ButtonKind.tinted,
+      compact: true,
       onTap: onTap,
-      borderRadius: BorderRadius.circular(99),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
-        decoration: BoxDecoration(
-          color: Brand.pillBg,
-          borderRadius: BorderRadius.circular(99),
-          border: Border.all(color: Brand.pillBorder),
-        ),
-        child: const Text(
-          'Mark paid',
-          style: TextStyle(
-            color: Brand.orangeSoft,
-            fontWeight: FontWeight.w700,
-            fontSize: 11.5,
-          ),
-        ),
-      ),
     );
   }
 }
@@ -768,50 +637,41 @@ class _Empty extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sys = Sys.of(context);
     // A search/filter that matched nothing — keep it plain.
     if (!noUnits) {
-      return const Padding(
-        padding: EdgeInsets.all(40),
+      return Padding(
+        padding: const EdgeInsets.all(40),
         child: Center(
           child: Text(
             'No units match.',
-            style: TextStyle(color: Brand.muted, fontSize: 14),
+            style: Type.subhead.colored(sys.secondaryLabel),
           ),
         ),
       );
     }
 
     // A genuinely empty ledger — invite the owner to add their first unit.
-    // Generous bottom padding keeps the button clear of the floating nav bar.
     return Padding(
-      padding: const EdgeInsets.fromLTRB(32, 40, 32, 28),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 76,
-            height: 76,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: Brand.glassBg,
-              shape: BoxShape.circle,
-              border: Border.all(color: Brand.glassBorder),
+      padding: const EdgeInsets.fromLTRB(Sys.gutter, 8, Sys.gutter, 10),
+      child: GroupedCard(
+        padding: const EdgeInsets.fromLTRB(Sys.gutter, 28, Sys.gutter, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.storefront_outlined, size: 44, color: sys.tertiaryLabel),
+            const SizedBox(height: 14),
+            Text('No units yet', style: Type.headline.colored(sys.label)),
+            const SizedBox(height: 6),
+            Text(
+              'Add your shutters or shops to start tracking rent each month.',
+              textAlign: TextAlign.center,
+              style: Type.footnote.colored(sys.secondaryLabel),
             ),
-            child: const Icon(Icons.storefront_outlined,
-                size: 33, color: Brand.orangeSoft),
-          ),
-          const SizedBox(height: 18),
-          Text('No units yet',
-              style: display(fontSize: 19, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          const Text(
-            'Add your shutters or shops to start tracking rent each month.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Brand.muted, fontSize: 13.5, height: 1.35),
-          ),
-          const SizedBox(height: 22),
-          _AddFirstUnitButton(onTap: () => EditUnitSheet.show(context)),
-        ],
+            const SizedBox(height: 20),
+            _AddFirstUnitButton(onTap: () => EditUnitSheet.show(context)),
+          ],
+        ),
       ),
     );
   }
@@ -824,38 +684,11 @@ class _AddFirstUnitButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
-          decoration: BoxDecoration(
-            gradient: Brand.orangeGradient,
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: [
-              BoxShadow(
-                color: Brand.orange.withValues(alpha: 0.4),
-                blurRadius: 20,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.add_rounded, size: 19, color: Colors.white),
-              SizedBox(width: 7),
-              Text('Add your first unit',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.w700)),
-            ],
-          ),
-        ),
-      ),
+    return AppButton(
+      label: 'Add your first unit',
+      icon: Icons.add,
+      kind: ButtonKind.prominent,
+      onTap: onTap,
     );
   }
 }

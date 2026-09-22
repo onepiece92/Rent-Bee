@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../domain/bs_calendar.dart';
@@ -8,9 +9,12 @@ import '../domain/money.dart';
 ///   • the calendar the UI labels dates in (BS vs AD),
 ///   • the currency the ledger is denominated in (NPR vs USD), and
 ///   • the annual lease escalation rate applied automatically on each
-///     unit's anniversary (0 = off).
+///     unit's anniversary (0 = off), and
+///   • the appearance override (Automatic / Light / Dark) — a per-device
+///     choice, so it is not mirrored to the cloud.
 class SettingsProvider extends ChangeNotifier {
   static const _kCalendar = 'calendar_mode';
+  static const _kAppearance = 'appearance';
   static const _kCurrency = 'currency';
   // Stored as a double (`_pct`); a separate key from the old whole-percent int
   // so reading never hits a SharedPreferences type clash.
@@ -26,6 +30,7 @@ class SettingsProvider extends ChangeNotifier {
   CalendarMode _calendar;
   Currency _currency;
   double _annualRaisePercent;
+  ThemeMode _appearance;
 
   /// Mirrors a settings change (calendar mode + currency + escalation rate)
   /// to the cloud for the signed-in owner. Set while a sync session is live
@@ -52,9 +57,23 @@ class SettingsProvider extends ChangeNotifier {
           orElse: () => Currency.npr,
         ),
         _annualRaisePercent =
-            _prefs.getDouble(_kRaisePercent) ?? _defaultRaisePercent;
+            _prefs.getDouble(_kRaisePercent) ?? _defaultRaisePercent,
+        _appearance = ThemeMode.values.firstWhere(
+          (m) => m.name == _prefs.getString(_kAppearance),
+          orElse: () => ThemeMode.system,
+        );
 
   CalendarMode get calendar => _calendar;
+
+  /// Automatic (follow the system), Light or Dark.
+  ThemeMode get appearance => _appearance;
+
+  Future<void> setAppearance(ThemeMode mode) async {
+    if (mode == _appearance) return;
+    _appearance = mode;
+    await _prefs.setString(_kAppearance, mode.name);
+    notifyListeners(); // per-device: no cloudPush
+  }
   bool get isAd => _calendar == CalendarMode.ad;
 
   Currency get currency => _currency;
