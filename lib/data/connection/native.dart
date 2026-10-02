@@ -17,6 +17,16 @@ Future<QueryExecutor> openLedgerExecutor() async {
   return LazyDatabase(() async {
     final dir = await getApplicationDocumentsDirectory();
     final file = File(p.join(dir.path, 'unit_ledger.sqlite'));
-    return NativeDatabase.createInBackground(file);
+    return NativeDatabase.createInBackground(
+      file,
+      // WAL + synchronous=NORMAL: commits no longer pay a full fsync each (the
+      // default rollback journal does), and reads don't wait on a write. WAL
+      // is still durable across an app crash; NORMAL can lose only the last
+      // commits on a power cut, and never corrupts the file.
+      setup: (db) {
+        db.execute('PRAGMA journal_mode = WAL;');
+        db.execute('PRAGMA synchronous = NORMAL;');
+      },
+    );
   });
 }

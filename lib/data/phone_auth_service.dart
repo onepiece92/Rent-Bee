@@ -5,6 +5,22 @@ import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 
 import '../firebase_options.dart';
 
+/// Runs an async setup once: callers share the attempt in flight and every
+/// later call returns the completed result — but a *failed* attempt is
+/// forgotten, so the next call runs the setup again.
+class RetryableOnce {
+  final Future<void> Function() _run;
+  Future<void>? _attempt;
+  RetryableOnce(this._run);
+
+  Future<void> call() {
+    return _attempt ??= _run().onError<Object>((e, st) {
+      _attempt = null;
+      return Future<void>.error(e, st);
+    });
+  }
+}
+
 /// Thin wrapper around Firebase phone authentication.
 ///
 /// All `firebase_auth` usage is isolated here so the rest of the app stays
@@ -21,8 +37,13 @@ class PhoneAuthService {
   /// Initializes Firebase on first use, idempotently. Kept **off the cold-start
   /// path**: a returning owner who unlocks with the local PIN never reaches
   /// onboarding, so Firebase is only loaded when a verification actually starts.
-  static Future<void>? _init;
-  static Future<void> ensureInitialized() => _init ??= _initialize();
+  ///
+  /// A failed attempt is not remembered: the next call tries again. (The
+  /// failed future used to be cached for the life of the process, so one
+  /// start without network meant no verification and no sync until the app
+  /// was force-quit.)
+  static final _init = RetryableOnce(_initialize);
+  static Future<void> ensureInitialized() => _init();
 
   static Future<void> _initialize() async {
     await Firebase.initializeApp(

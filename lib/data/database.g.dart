@@ -962,6 +962,17 @@ class $PaymentsTable extends Payments with TableInfo<$PaymentsTable, Payment> {
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _rentAtPaymentMeta = const VerificationMeta(
+    'rentAtPayment',
+  );
+  @override
+  late final GeneratedColumn<int> rentAtPayment = GeneratedColumn<int>(
+    'rent_at_payment',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _paidOnMeta = const VerificationMeta('paidOn');
   @override
   late final GeneratedColumn<DateTime> paidOn = GeneratedColumn<DateTime>(
@@ -1009,6 +1020,7 @@ class $PaymentsTable extends Payments with TableInfo<$PaymentsTable, Payment> {
     year,
     month,
     amount,
+    rentAtPayment,
     paidOn,
     method,
     note,
@@ -1061,6 +1073,15 @@ class $PaymentsTable extends Payments with TableInfo<$PaymentsTable, Payment> {
     } else if (isInserting) {
       context.missing(_amountMeta);
     }
+    if (data.containsKey('rent_at_payment')) {
+      context.handle(
+        _rentAtPaymentMeta,
+        rentAtPayment.isAcceptableOrUnknown(
+          data['rent_at_payment']!,
+          _rentAtPaymentMeta,
+        ),
+      );
+    }
     if (data.containsKey('paid_on')) {
       context.handle(
         _paidOnMeta,
@@ -1112,6 +1133,10 @@ class $PaymentsTable extends Payments with TableInfo<$PaymentsTable, Payment> {
         DriftSqlType.int,
         data['${effectivePrefix}amount'],
       )!,
+      rentAtPayment: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}rent_at_payment'],
+      ),
       paidOn: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}paid_on'],
@@ -1148,6 +1173,15 @@ class Payment extends DataClass implements Insertable<Payment> {
   final int year;
   final int month;
   final int amount;
+
+  /// The monthly rent this payment was made against, captured when it was
+  /// recorded. A month that has a payment is priced at this rent forever
+  /// after, so editing the unit's rent, an anniversary raise, or a change of
+  /// escalation rate can't turn a month that was paid in full into "partial"
+  /// with a phantom balance (buglog B05). Null on payments recorded before
+  /// this column existed, and on imported ones — those fall back to the rent
+  /// reconstructed for that month.
+  final int? rentAtPayment;
   final DateTime? paidOn;
   final PayMethod method;
   final String? note;
@@ -1158,6 +1192,7 @@ class Payment extends DataClass implements Insertable<Payment> {
     required this.year,
     required this.month,
     required this.amount,
+    this.rentAtPayment,
     this.paidOn,
     required this.method,
     this.note,
@@ -1171,6 +1206,9 @@ class Payment extends DataClass implements Insertable<Payment> {
     map['year'] = Variable<int>(year);
     map['month'] = Variable<int>(month);
     map['amount'] = Variable<int>(amount);
+    if (!nullToAbsent || rentAtPayment != null) {
+      map['rent_at_payment'] = Variable<int>(rentAtPayment);
+    }
     if (!nullToAbsent || paidOn != null) {
       map['paid_on'] = Variable<DateTime>(paidOn);
     }
@@ -1193,6 +1231,9 @@ class Payment extends DataClass implements Insertable<Payment> {
       year: Value(year),
       month: Value(month),
       amount: Value(amount),
+      rentAtPayment: rentAtPayment == null && nullToAbsent
+          ? const Value.absent()
+          : Value(rentAtPayment),
       paidOn: paidOn == null && nullToAbsent
           ? const Value.absent()
           : Value(paidOn),
@@ -1213,6 +1254,7 @@ class Payment extends DataClass implements Insertable<Payment> {
       year: serializer.fromJson<int>(json['year']),
       month: serializer.fromJson<int>(json['month']),
       amount: serializer.fromJson<int>(json['amount']),
+      rentAtPayment: serializer.fromJson<int?>(json['rentAtPayment']),
       paidOn: serializer.fromJson<DateTime?>(json['paidOn']),
       method: $PaymentsTable.$convertermethod.fromJson(
         serializer.fromJson<String>(json['method']),
@@ -1230,6 +1272,7 @@ class Payment extends DataClass implements Insertable<Payment> {
       'year': serializer.toJson<int>(year),
       'month': serializer.toJson<int>(month),
       'amount': serializer.toJson<int>(amount),
+      'rentAtPayment': serializer.toJson<int?>(rentAtPayment),
       'paidOn': serializer.toJson<DateTime?>(paidOn),
       'method': serializer.toJson<String>(
         $PaymentsTable.$convertermethod.toJson(method),
@@ -1245,6 +1288,7 @@ class Payment extends DataClass implements Insertable<Payment> {
     int? year,
     int? month,
     int? amount,
+    Value<int?> rentAtPayment = const Value.absent(),
     Value<DateTime?> paidOn = const Value.absent(),
     PayMethod? method,
     Value<String?> note = const Value.absent(),
@@ -1255,6 +1299,9 @@ class Payment extends DataClass implements Insertable<Payment> {
     year: year ?? this.year,
     month: month ?? this.month,
     amount: amount ?? this.amount,
+    rentAtPayment: rentAtPayment.present
+        ? rentAtPayment.value
+        : this.rentAtPayment,
     paidOn: paidOn.present ? paidOn.value : this.paidOn,
     method: method ?? this.method,
     note: note.present ? note.value : this.note,
@@ -1267,6 +1314,9 @@ class Payment extends DataClass implements Insertable<Payment> {
       year: data.year.present ? data.year.value : this.year,
       month: data.month.present ? data.month.value : this.month,
       amount: data.amount.present ? data.amount.value : this.amount,
+      rentAtPayment: data.rentAtPayment.present
+          ? data.rentAtPayment.value
+          : this.rentAtPayment,
       paidOn: data.paidOn.present ? data.paidOn.value : this.paidOn,
       method: data.method.present ? data.method.value : this.method,
       note: data.note.present ? data.note.value : this.note,
@@ -1282,6 +1332,7 @@ class Payment extends DataClass implements Insertable<Payment> {
           ..write('year: $year, ')
           ..write('month: $month, ')
           ..write('amount: $amount, ')
+          ..write('rentAtPayment: $rentAtPayment, ')
           ..write('paidOn: $paidOn, ')
           ..write('method: $method, ')
           ..write('note: $note, ')
@@ -1297,6 +1348,7 @@ class Payment extends DataClass implements Insertable<Payment> {
     year,
     month,
     amount,
+    rentAtPayment,
     paidOn,
     method,
     note,
@@ -1311,6 +1363,7 @@ class Payment extends DataClass implements Insertable<Payment> {
           other.year == this.year &&
           other.month == this.month &&
           other.amount == this.amount &&
+          other.rentAtPayment == this.rentAtPayment &&
           other.paidOn == this.paidOn &&
           other.method == this.method &&
           other.note == this.note &&
@@ -1323,6 +1376,7 @@ class PaymentsCompanion extends UpdateCompanion<Payment> {
   final Value<int> year;
   final Value<int> month;
   final Value<int> amount;
+  final Value<int?> rentAtPayment;
   final Value<DateTime?> paidOn;
   final Value<PayMethod> method;
   final Value<String?> note;
@@ -1333,6 +1387,7 @@ class PaymentsCompanion extends UpdateCompanion<Payment> {
     this.year = const Value.absent(),
     this.month = const Value.absent(),
     this.amount = const Value.absent(),
+    this.rentAtPayment = const Value.absent(),
     this.paidOn = const Value.absent(),
     this.method = const Value.absent(),
     this.note = const Value.absent(),
@@ -1344,6 +1399,7 @@ class PaymentsCompanion extends UpdateCompanion<Payment> {
     required int year,
     required int month,
     required int amount,
+    this.rentAtPayment = const Value.absent(),
     this.paidOn = const Value.absent(),
     this.method = const Value.absent(),
     this.note = const Value.absent(),
@@ -1358,6 +1414,7 @@ class PaymentsCompanion extends UpdateCompanion<Payment> {
     Expression<int>? year,
     Expression<int>? month,
     Expression<int>? amount,
+    Expression<int>? rentAtPayment,
     Expression<DateTime>? paidOn,
     Expression<String>? method,
     Expression<String>? note,
@@ -1369,6 +1426,7 @@ class PaymentsCompanion extends UpdateCompanion<Payment> {
       if (year != null) 'year': year,
       if (month != null) 'month': month,
       if (amount != null) 'amount': amount,
+      if (rentAtPayment != null) 'rent_at_payment': rentAtPayment,
       if (paidOn != null) 'paid_on': paidOn,
       if (method != null) 'method': method,
       if (note != null) 'note': note,
@@ -1382,6 +1440,7 @@ class PaymentsCompanion extends UpdateCompanion<Payment> {
     Value<int>? year,
     Value<int>? month,
     Value<int>? amount,
+    Value<int?>? rentAtPayment,
     Value<DateTime?>? paidOn,
     Value<PayMethod>? method,
     Value<String?>? note,
@@ -1393,6 +1452,7 @@ class PaymentsCompanion extends UpdateCompanion<Payment> {
       year: year ?? this.year,
       month: month ?? this.month,
       amount: amount ?? this.amount,
+      rentAtPayment: rentAtPayment ?? this.rentAtPayment,
       paidOn: paidOn ?? this.paidOn,
       method: method ?? this.method,
       note: note ?? this.note,
@@ -1417,6 +1477,9 @@ class PaymentsCompanion extends UpdateCompanion<Payment> {
     }
     if (amount.present) {
       map['amount'] = Variable<int>(amount.value);
+    }
+    if (rentAtPayment.present) {
+      map['rent_at_payment'] = Variable<int>(rentAtPayment.value);
     }
     if (paidOn.present) {
       map['paid_on'] = Variable<DateTime>(paidOn.value);
@@ -1443,6 +1506,7 @@ class PaymentsCompanion extends UpdateCompanion<Payment> {
           ..write('year: $year, ')
           ..write('month: $month, ')
           ..write('amount: $amount, ')
+          ..write('rentAtPayment: $rentAtPayment, ')
           ..write('paidOn: $paidOn, ')
           ..write('method: $method, ')
           ..write('note: $note, ')
@@ -1736,8 +1800,8 @@ class Charge extends DataClass implements Insertable<Charge> {
 
   /// Amount the landlord is deducting from this month's rent — typically goods
   /// or services bought from the tenant's shop and settled against rent rather
-  /// than paid in cash. Whole NPR, 0 = none. The month's due becomes
-  /// `monthly_rent − deduction`, floored at 0.
+  /// than paid in cash. Whole NPR, 0 = none. It comes off the month's due
+  /// (see the table comment above).
   final int deduction;
 
   /// What the deduction was for (e.g. "2 sacks rice"). Null when none.
@@ -2058,12 +2122,370 @@ class ChargesCompanion extends UpdateCompanion<Charge> {
   }
 }
 
+class $PendingPushesTable extends PendingPushes
+    with TableInfo<$PendingPushesTable, PendingPush> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $PendingPushesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _kindMeta = const VerificationMeta('kind');
+  @override
+  late final GeneratedColumn<String> kind = GeneratedColumn<String>(
+    'kind',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _cloudIdMeta = const VerificationMeta(
+    'cloudId',
+  );
+  @override
+  late final GeneratedColumn<String> cloudId = GeneratedColumn<String>(
+    'cloud_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _yearMeta = const VerificationMeta('year');
+  @override
+  late final GeneratedColumn<int> year = GeneratedColumn<int>(
+    'year',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _monthMeta = const VerificationMeta('month');
+  @override
+  late final GeneratedColumn<int> month = GeneratedColumn<int>(
+    'month',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _seqMeta = const VerificationMeta('seq');
+  @override
+  late final GeneratedColumn<int> seq = GeneratedColumn<int>(
+    'seq',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [kind, cloudId, year, month, seq];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'pending_pushes';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<PendingPush> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('kind')) {
+      context.handle(
+        _kindMeta,
+        kind.isAcceptableOrUnknown(data['kind']!, _kindMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_kindMeta);
+    }
+    if (data.containsKey('cloud_id')) {
+      context.handle(
+        _cloudIdMeta,
+        cloudId.isAcceptableOrUnknown(data['cloud_id']!, _cloudIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_cloudIdMeta);
+    }
+    if (data.containsKey('year')) {
+      context.handle(
+        _yearMeta,
+        year.isAcceptableOrUnknown(data['year']!, _yearMeta),
+      );
+    }
+    if (data.containsKey('month')) {
+      context.handle(
+        _monthMeta,
+        month.isAcceptableOrUnknown(data['month']!, _monthMeta),
+      );
+    }
+    if (data.containsKey('seq')) {
+      context.handle(
+        _seqMeta,
+        seq.isAcceptableOrUnknown(data['seq']!, _seqMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_seqMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {kind, cloudId, year, month};
+  @override
+  PendingPush map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return PendingPush(
+      kind: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}kind'],
+      )!,
+      cloudId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}cloud_id'],
+      )!,
+      year: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}year'],
+      )!,
+      month: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}month'],
+      )!,
+      seq: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}seq'],
+      )!,
+    );
+  }
+
+  @override
+  $PendingPushesTable createAlias(String alias) {
+    return $PendingPushesTable(attachedDatabase, alias);
+  }
+}
+
+class PendingPush extends DataClass implements Insertable<PendingPush> {
+  /// `unit`, `payment`, `charge`, or `all` (replace the whole cloud copy with
+  /// this device's ledger — a restore, demo data, erase, or manual re-sync).
+  final String kind;
+
+  /// The unit's stable cloudId (empty for `all`).
+  final String cloudId;
+  final int year;
+  final int month;
+
+  /// Bumped every time the key is queued again. An acknowledgement clears the
+  /// row only if it is no newer than the push that was acknowledged, so a
+  /// change made while an older push was in flight stays pending.
+  final int seq;
+  const PendingPush({
+    required this.kind,
+    required this.cloudId,
+    required this.year,
+    required this.month,
+    required this.seq,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['kind'] = Variable<String>(kind);
+    map['cloud_id'] = Variable<String>(cloudId);
+    map['year'] = Variable<int>(year);
+    map['month'] = Variable<int>(month);
+    map['seq'] = Variable<int>(seq);
+    return map;
+  }
+
+  PendingPushesCompanion toCompanion(bool nullToAbsent) {
+    return PendingPushesCompanion(
+      kind: Value(kind),
+      cloudId: Value(cloudId),
+      year: Value(year),
+      month: Value(month),
+      seq: Value(seq),
+    );
+  }
+
+  factory PendingPush.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return PendingPush(
+      kind: serializer.fromJson<String>(json['kind']),
+      cloudId: serializer.fromJson<String>(json['cloudId']),
+      year: serializer.fromJson<int>(json['year']),
+      month: serializer.fromJson<int>(json['month']),
+      seq: serializer.fromJson<int>(json['seq']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'kind': serializer.toJson<String>(kind),
+      'cloudId': serializer.toJson<String>(cloudId),
+      'year': serializer.toJson<int>(year),
+      'month': serializer.toJson<int>(month),
+      'seq': serializer.toJson<int>(seq),
+    };
+  }
+
+  PendingPush copyWith({
+    String? kind,
+    String? cloudId,
+    int? year,
+    int? month,
+    int? seq,
+  }) => PendingPush(
+    kind: kind ?? this.kind,
+    cloudId: cloudId ?? this.cloudId,
+    year: year ?? this.year,
+    month: month ?? this.month,
+    seq: seq ?? this.seq,
+  );
+  PendingPush copyWithCompanion(PendingPushesCompanion data) {
+    return PendingPush(
+      kind: data.kind.present ? data.kind.value : this.kind,
+      cloudId: data.cloudId.present ? data.cloudId.value : this.cloudId,
+      year: data.year.present ? data.year.value : this.year,
+      month: data.month.present ? data.month.value : this.month,
+      seq: data.seq.present ? data.seq.value : this.seq,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('PendingPush(')
+          ..write('kind: $kind, ')
+          ..write('cloudId: $cloudId, ')
+          ..write('year: $year, ')
+          ..write('month: $month, ')
+          ..write('seq: $seq')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(kind, cloudId, year, month, seq);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is PendingPush &&
+          other.kind == this.kind &&
+          other.cloudId == this.cloudId &&
+          other.year == this.year &&
+          other.month == this.month &&
+          other.seq == this.seq);
+}
+
+class PendingPushesCompanion extends UpdateCompanion<PendingPush> {
+  final Value<String> kind;
+  final Value<String> cloudId;
+  final Value<int> year;
+  final Value<int> month;
+  final Value<int> seq;
+  final Value<int> rowid;
+  const PendingPushesCompanion({
+    this.kind = const Value.absent(),
+    this.cloudId = const Value.absent(),
+    this.year = const Value.absent(),
+    this.month = const Value.absent(),
+    this.seq = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  PendingPushesCompanion.insert({
+    required String kind,
+    required String cloudId,
+    this.year = const Value.absent(),
+    this.month = const Value.absent(),
+    required int seq,
+    this.rowid = const Value.absent(),
+  }) : kind = Value(kind),
+       cloudId = Value(cloudId),
+       seq = Value(seq);
+  static Insertable<PendingPush> custom({
+    Expression<String>? kind,
+    Expression<String>? cloudId,
+    Expression<int>? year,
+    Expression<int>? month,
+    Expression<int>? seq,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (kind != null) 'kind': kind,
+      if (cloudId != null) 'cloud_id': cloudId,
+      if (year != null) 'year': year,
+      if (month != null) 'month': month,
+      if (seq != null) 'seq': seq,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  PendingPushesCompanion copyWith({
+    Value<String>? kind,
+    Value<String>? cloudId,
+    Value<int>? year,
+    Value<int>? month,
+    Value<int>? seq,
+    Value<int>? rowid,
+  }) {
+    return PendingPushesCompanion(
+      kind: kind ?? this.kind,
+      cloudId: cloudId ?? this.cloudId,
+      year: year ?? this.year,
+      month: month ?? this.month,
+      seq: seq ?? this.seq,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (kind.present) {
+      map['kind'] = Variable<String>(kind.value);
+    }
+    if (cloudId.present) {
+      map['cloud_id'] = Variable<String>(cloudId.value);
+    }
+    if (year.present) {
+      map['year'] = Variable<int>(year.value);
+    }
+    if (month.present) {
+      map['month'] = Variable<int>(month.value);
+    }
+    if (seq.present) {
+      map['seq'] = Variable<int>(seq.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('PendingPushesCompanion(')
+          ..write('kind: $kind, ')
+          ..write('cloudId: $cloudId, ')
+          ..write('year: $year, ')
+          ..write('month: $month, ')
+          ..write('seq: $seq, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $UnitsTable units = $UnitsTable(this);
   late final $PaymentsTable payments = $PaymentsTable(this);
   late final $ChargesTable charges = $ChargesTable(this);
+  late final $PendingPushesTable pendingPushes = $PendingPushesTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -2072,6 +2494,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     units,
     payments,
     charges,
+    pendingPushes,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
@@ -2672,6 +3095,7 @@ typedef $$PaymentsTableCreateCompanionBuilder =
       required int year,
       required int month,
       required int amount,
+      Value<int?> rentAtPayment,
       Value<DateTime?> paidOn,
       Value<PayMethod> method,
       Value<String?> note,
@@ -2684,6 +3108,7 @@ typedef $$PaymentsTableUpdateCompanionBuilder =
       Value<int> year,
       Value<int> month,
       Value<int> amount,
+      Value<int?> rentAtPayment,
       Value<DateTime?> paidOn,
       Value<PayMethod> method,
       Value<String?> note,
@@ -2739,6 +3164,11 @@ class $$PaymentsTableFilterComposer
 
   ColumnFilters<int> get amount => $composableBuilder(
     column: $table.amount,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get rentAtPayment => $composableBuilder(
+    column: $table.rentAtPayment,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2816,6 +3246,11 @@ class $$PaymentsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get rentAtPayment => $composableBuilder(
+    column: $table.rentAtPayment,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get paidOn => $composableBuilder(
     column: $table.paidOn,
     builder: (column) => ColumnOrderings(column),
@@ -2880,6 +3315,11 @@ class $$PaymentsTableAnnotationComposer
 
   GeneratedColumn<int> get amount =>
       $composableBuilder(column: $table.amount, builder: (column) => column);
+
+  GeneratedColumn<int> get rentAtPayment => $composableBuilder(
+    column: $table.rentAtPayment,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<DateTime> get paidOn =>
       $composableBuilder(column: $table.paidOn, builder: (column) => column);
@@ -2950,6 +3390,7 @@ class $$PaymentsTableTableManager
                 Value<int> year = const Value.absent(),
                 Value<int> month = const Value.absent(),
                 Value<int> amount = const Value.absent(),
+                Value<int?> rentAtPayment = const Value.absent(),
                 Value<DateTime?> paidOn = const Value.absent(),
                 Value<PayMethod> method = const Value.absent(),
                 Value<String?> note = const Value.absent(),
@@ -2960,6 +3401,7 @@ class $$PaymentsTableTableManager
                 year: year,
                 month: month,
                 amount: amount,
+                rentAtPayment: rentAtPayment,
                 paidOn: paidOn,
                 method: method,
                 note: note,
@@ -2972,6 +3414,7 @@ class $$PaymentsTableTableManager
                 required int year,
                 required int month,
                 required int amount,
+                Value<int?> rentAtPayment = const Value.absent(),
                 Value<DateTime?> paidOn = const Value.absent(),
                 Value<PayMethod> method = const Value.absent(),
                 Value<String?> note = const Value.absent(),
@@ -2982,6 +3425,7 @@ class $$PaymentsTableTableManager
                 year: year,
                 month: month,
                 amount: amount,
+                rentAtPayment: rentAtPayment,
                 paidOn: paidOn,
                 method: method,
                 note: note,
@@ -3465,6 +3909,206 @@ typedef $$ChargesTableProcessedTableManager =
       Charge,
       PrefetchHooks Function({bool unitId})
     >;
+typedef $$PendingPushesTableCreateCompanionBuilder =
+    PendingPushesCompanion Function({
+      required String kind,
+      required String cloudId,
+      Value<int> year,
+      Value<int> month,
+      required int seq,
+      Value<int> rowid,
+    });
+typedef $$PendingPushesTableUpdateCompanionBuilder =
+    PendingPushesCompanion Function({
+      Value<String> kind,
+      Value<String> cloudId,
+      Value<int> year,
+      Value<int> month,
+      Value<int> seq,
+      Value<int> rowid,
+    });
+
+class $$PendingPushesTableFilterComposer
+    extends Composer<_$AppDatabase, $PendingPushesTable> {
+  $$PendingPushesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get kind => $composableBuilder(
+    column: $table.kind,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get cloudId => $composableBuilder(
+    column: $table.cloudId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get year => $composableBuilder(
+    column: $table.year,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get month => $composableBuilder(
+    column: $table.month,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get seq => $composableBuilder(
+    column: $table.seq,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$PendingPushesTableOrderingComposer
+    extends Composer<_$AppDatabase, $PendingPushesTable> {
+  $$PendingPushesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get kind => $composableBuilder(
+    column: $table.kind,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get cloudId => $composableBuilder(
+    column: $table.cloudId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get year => $composableBuilder(
+    column: $table.year,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get month => $composableBuilder(
+    column: $table.month,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get seq => $composableBuilder(
+    column: $table.seq,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$PendingPushesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $PendingPushesTable> {
+  $$PendingPushesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get kind =>
+      $composableBuilder(column: $table.kind, builder: (column) => column);
+
+  GeneratedColumn<String> get cloudId =>
+      $composableBuilder(column: $table.cloudId, builder: (column) => column);
+
+  GeneratedColumn<int> get year =>
+      $composableBuilder(column: $table.year, builder: (column) => column);
+
+  GeneratedColumn<int> get month =>
+      $composableBuilder(column: $table.month, builder: (column) => column);
+
+  GeneratedColumn<int> get seq =>
+      $composableBuilder(column: $table.seq, builder: (column) => column);
+}
+
+class $$PendingPushesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $PendingPushesTable,
+          PendingPush,
+          $$PendingPushesTableFilterComposer,
+          $$PendingPushesTableOrderingComposer,
+          $$PendingPushesTableAnnotationComposer,
+          $$PendingPushesTableCreateCompanionBuilder,
+          $$PendingPushesTableUpdateCompanionBuilder,
+          (
+            PendingPush,
+            BaseReferences<_$AppDatabase, $PendingPushesTable, PendingPush>,
+          ),
+          PendingPush,
+          PrefetchHooks Function()
+        > {
+  $$PendingPushesTableTableManager(_$AppDatabase db, $PendingPushesTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$PendingPushesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$PendingPushesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$PendingPushesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> kind = const Value.absent(),
+                Value<String> cloudId = const Value.absent(),
+                Value<int> year = const Value.absent(),
+                Value<int> month = const Value.absent(),
+                Value<int> seq = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => PendingPushesCompanion(
+                kind: kind,
+                cloudId: cloudId,
+                year: year,
+                month: month,
+                seq: seq,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String kind,
+                required String cloudId,
+                Value<int> year = const Value.absent(),
+                Value<int> month = const Value.absent(),
+                required int seq,
+                Value<int> rowid = const Value.absent(),
+              }) => PendingPushesCompanion.insert(
+                kind: kind,
+                cloudId: cloudId,
+                year: year,
+                month: month,
+                seq: seq,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$PendingPushesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $PendingPushesTable,
+      PendingPush,
+      $$PendingPushesTableFilterComposer,
+      $$PendingPushesTableOrderingComposer,
+      $$PendingPushesTableAnnotationComposer,
+      $$PendingPushesTableCreateCompanionBuilder,
+      $$PendingPushesTableUpdateCompanionBuilder,
+      (
+        PendingPush,
+        BaseReferences<_$AppDatabase, $PendingPushesTable, PendingPush>,
+      ),
+      PendingPush,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -3475,4 +4119,6 @@ class $AppDatabaseManager {
       $$PaymentsTableTableManager(_db, _db.payments);
   $$ChargesTableTableManager get charges =>
       $$ChargesTableTableManager(_db, _db.charges);
+  $$PendingPushesTableTableManager get pendingPushes =>
+      $$PendingPushesTableTableManager(_db, _db.pendingPushes);
 }

@@ -182,7 +182,10 @@ class ListRow extends StatelessWidget {
                   ],
                 ),
               ),
-              if (trailing != null) ...[const SizedBox(width: 12), trailing!],
+              if (trailing != null) ...[
+                const SizedBox(width: 12),
+                TrailingValue(share: 0.5, child: trailing!),
+              ],
               if (chevron) ...[
                 const SizedBox(width: 6),
                 Icon(Icons.chevron_right, size: 20, color: sys.tertiaryLabel),
@@ -191,6 +194,93 @@ class ListRow extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Dynamic Type helpers, so layouts hold at the largest text sizes.
+abstract final class TextSize {
+  /// The person's text size relative to the default (1.0).
+  static double factor(BuildContext context) =>
+      MediaQuery.textScalerOf(context).scale(17) / 17;
+
+  /// True at the accessibility sizes, where a title and a value no longer
+  /// fit side by side — rows stack them instead of squeezing either.
+  static bool large(BuildContext context) => factor(context) > 1.5;
+
+  /// For chrome that cannot grow with its text — the tab bar, toolbar
+  /// buttons, compact data strips: text scales up to [max] and stops, as
+  /// iOS bars do.
+  static Widget capped(Widget child, {double max = 1.3}) =>
+      MediaQuery.withClampedTextScaling(maxScaleFactor: max, child: child);
+}
+
+/// A row's trailing value (an amount, a badge, a control): takes the width
+/// it needs up to [share] of the screen, and is scaled down to fit beyond
+/// that — a figure is never wrapped mid-number, truncated, or allowed to
+/// push the row past its edge.
+class TrailingValue extends StatelessWidget {
+  final Widget child;
+  final double share;
+  const TrailingValue({super.key, required this.child, this.share = 0.45});
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+          maxWidth: MediaQuery.sizeOf(context).width * share),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: AlignmentDirectional.centerEnd,
+        child: child,
+      ),
+    );
+  }
+}
+
+/// A list row of three parts — a leading avatar, a title block and a
+/// trailing block. Side by side normally; at the accessibility text sizes
+/// the trailing block moves under the title, so a long name and a large
+/// amount each get the full width.
+class SplitRow extends StatelessWidget {
+  final Widget leading;
+  final Widget title;
+
+  /// Builds the trailing block; `stacked` is true when it sits under the
+  /// title (align to the start, free to use the whole width).
+  final Widget Function(BuildContext context, bool stacked) trailing;
+
+  const SplitRow({
+    super.key,
+    required this.leading,
+    required this.title,
+    required this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final head = Row(
+      children: [leading, const SizedBox(width: 12), Expanded(child: title)],
+    );
+    if (TextSize.large(context)) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [head, const SizedBox(height: 8), trailing(context, true)],
+      );
+    }
+    return Row(
+      children: [
+        leading,
+        const SizedBox(width: 12),
+        Expanded(child: title),
+        const SizedBox(width: 10),
+        ConstrainedBox(
+          constraints: BoxConstraints(
+              maxWidth: MediaQuery.sizeOf(context).width * 0.5),
+          child: trailing(context, false),
+        ),
+      ],
     );
   }
 }
@@ -268,8 +358,12 @@ class StatusBadge extends StatelessWidget {
               decoration: BoxDecoration(color: color, shape: BoxShape.circle),
             ),
           const SizedBox(width: 6),
-          Text(label,
-              style: Type.caption1.semibold.colored(textColor).tabular),
+          Flexible(
+            child: Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Type.caption1.semibold.colored(textColor).tabular),
+          ),
         ],
       ),
     );
@@ -390,6 +484,17 @@ class Glass extends StatelessWidget {
   final bool tinted;
   final bool shadow;
 
+  /// Near-opaque glass for surfaces that carry a lot of text (alerts): the
+  /// material still reads as glass, but body text gets the contrast of a
+  /// solid card.
+  final bool strong;
+
+  /// Whether to blur what lies behind. Only glass that *floats over content*
+  /// needs it (tab bar, toasts). A control laid out in the page sits on the
+  /// flat page colour, where a blur changes no pixel but still costs an
+  /// offscreen layer every frame — those pass false and look identical.
+  final bool blur;
+
   const Glass({
     super.key,
     required this.child,
@@ -397,6 +502,8 @@ class Glass extends StatelessWidget {
     this.padding = EdgeInsets.zero,
     this.tinted = false,
     this.shadow = true,
+    this.strong = false,
+    this.blur = true,
   });
 
   @override
@@ -407,11 +514,38 @@ class Glass extends StatelessWidget {
     final Color fill;
     if (tinted) {
       fill = sys.tint.withValues(alpha: highContrast ? 0.98 : 0.88);
+    } else if (strong) {
+      fill = sys.card.withValues(alpha: 0.96);
     } else if (highContrast) {
       fill = sys.glassTint.withValues(alpha: 0.94);
     } else {
       fill = sys.glassTint;
     }
+    final surface = DecoratedBox(
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: radius,
+        border: Border.all(
+            color: highContrast
+                ? sys.glassEdge.withValues(alpha: 0.5)
+                : sys.glassEdge,
+            width: 0.5),
+      ),
+      child: Stack(
+        children: [
+          // Top rim highlight (inset 0 0.5px 0 rim), clipped by the rounded
+          // corners.
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 0.5,
+            child: ColoredBox(color: tinted ? Colors.white54 : sys.glassRim),
+          ),
+          Padding(padding: padding, child: child),
+        ],
+      ),
+    );
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: radius,
@@ -431,34 +565,10 @@ class Glass extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: radius,
-        child: BackdropFilter(
-          filter: Sys.glassFilter(),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: fill,
-              borderRadius: radius,
-              border: Border.all(
-                  color: highContrast
-                      ? sys.glassEdge.withValues(alpha: 0.5)
-                      : sys.glassEdge,
-                  width: 0.5),
-            ),
-            child: Stack(
-              children: [
-                // Top rim highlight (inset 0 0.5px 0 rim), clipped by the
-                // rounded corners.
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: 0.5,
-                  child: ColoredBox(color: tinted ? Colors.white54 : sys.glassRim),
-                ),
-                Padding(padding: padding, child: child),
-              ],
-            ),
-          ),
-        ),
+        // A near-opaque (strong) fill hides the blur anyway.
+        child: blur && !strong
+            ? BackdropFilter(filter: Sys.glassFilter(), child: surface)
+            : surface,
       ),
     );
   }
@@ -491,6 +601,7 @@ class GlassIconButton extends StatelessWidget {
       child: Pressable(
         child: Glass(
           tinted: prominent,
+          blur: false, // laid out in the page, over the flat background
           child: Material(
             color: Colors.transparent,
             child: InkWell(
@@ -588,11 +699,13 @@ class AppButton extends StatelessWidget {
       ),
     );
     final artwork = switch (kind) {
-      ButtonKind.glass => Glass(child: capsule),
-      ButtonKind.prominentGlass => Glass(tinted: true, child: capsule),
+      // In-page buttons: on the flat page colour a blur would change nothing.
+      ButtonKind.glass => Glass(blur: false, child: capsule),
+      ButtonKind.prominentGlass =>
+        Glass(tinted: true, blur: false, child: capsule),
       _ => capsule,
     };
-    return Opacity(
+    final button = Opacity(
       opacity: enabled || busy ? 1 : 0.4,
       child: Pressable(
         child: Material(
@@ -612,6 +725,9 @@ class AppButton extends StatelessWidget {
         ),
       ),
     );
+    // A compact button is toolbar chrome, sharing a row with a title: its
+    // label stops growing where a bar's would.
+    return compact ? TextSize.capped(button) : button;
   }
 }
 
@@ -682,7 +798,7 @@ class SegmentedControl<T> extends StatelessWidget {
         ],
       ),
     );
-    if (glass) return Glass(child: track);
+    if (glass) return Glass(blur: false, child: track);
     return Material(
       color: sys.tertiaryFill,
       shape: const StadiumBorder(),

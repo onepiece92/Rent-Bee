@@ -101,6 +101,15 @@ class Payments extends Table {
   IntColumn get year => integer()(); // BS year
   IntColumn get month => integer()(); // 1–12
   IntColumn get amount => integer()(); // whole NPR, captured per record
+
+  /// The monthly rent this payment was made against, captured when it was
+  /// recorded. A month that has a payment is priced at this rent forever
+  /// after, so editing the unit's rent, an anniversary raise, or a change of
+  /// escalation rate can't turn a month that was paid in full into "partial"
+  /// with a phantom balance (buglog B05). Null on payments recorded before
+  /// this column existed, and on imported ones — those fall back to the rent
+  /// reconstructed for that month.
+  IntColumn get rentAtPayment => integer().nullable()();
   DateTimeColumn get paidOn => dateTime().nullable()();
   TextColumn get method =>
       textEnum<PayMethod>().withDefault(Constant(PayMethod.cash.name))();
@@ -115,13 +124,43 @@ class Payments extends Table {
       ];
 }
 
-@DriftDatabase(tables: [Units, Payments, Charges])
+/// The local **outbox** for cloud sync: one row per ledger key whose latest
+/// local state the cloud has not yet acknowledged.
+///
+/// Every local change records its key here before the push is fired, and the
+/// row is removed only when that push is acknowledged. So nothing a person did
+/// on this device can be lost to sync: at sync start the outbox is pushed
+/// first, and no row with a pending key is ever overwritten or deleted by a
+/// pull. That covers changes made before sync has finished starting, changes
+/// made in a session where sync could not start, and pushes that failed
+/// (buglog B03). It is local bookkeeping only — never synced or backed up.
+@DataClassName('PendingPush')
+class PendingPushes extends Table {
+  /// `unit`, `payment`, `charge`, or `all` (replace the whole cloud copy with
+  /// this device's ledger — a restore, demo data, erase, or manual re-sync).
+  TextColumn get kind => text()();
+
+  /// The unit's stable cloudId (empty for `all`).
+  TextColumn get cloudId => text()();
+  IntColumn get year => integer().withDefault(const Constant(0))();
+  IntColumn get month => integer().withDefault(const Constant(0))();
+
+  /// Bumped every time the key is queued again. An acknowledgement clears the
+  /// row only if it is no newer than the push that was acknowledged, so a
+  /// change made while an older push was in flight stays pending.
+  IntColumn get seq => integer()();
+
+  @override
+  Set<Column> get primaryKey => {kind, cloudId, year, month};
+}
+
+@DriftDatabase(tables: [Units, Payments, Charges, PendingPushes])
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.executor);
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -151,9 +190,21 @@ class AppDatabase extends _$AppDatabase {
             }
           }
           // v5: landlord's per-month rent deduction (+ note) on the charges row.
-          if (from < 5) {
+          // Only for databases that already had a charges table (v3/v4): a
+          // v1/v2 database gets the table from the v3 step above, created with
+          // today's columns, and adding them again fails with "duplicate
+          // column name" and the app never opens (buglog B28).
+          if (from >= 3 && from < 5) {
             await m.addColumn(charges, charges.deduction);
             await m.addColumn(charges, charges.deductionNote);
+          }
+          // v6: the local sync outbox.
+          if (from < 6) {
+            await m.createTable(pendingPushes);
+          }
+          // v7: the rent each payment was made against.
+          if (from < 7) {
+            await m.addColumn(payments, payments.rentAtPayment);
           }
         },
         beforeOpen: (details) async {

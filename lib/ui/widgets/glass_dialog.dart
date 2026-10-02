@@ -61,6 +61,9 @@ class GlassDialog extends StatelessWidget {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 340),
           child: Glass(
+            // Near-opaque: an alert carries the text that matters most
+            // (destructive warnings), so it gets full label contrast.
+            strong: true,
             borderRadius: BorderRadius.circular(Sys.radiusCard),
             child: Material(
               type: MaterialType.transparency,
@@ -68,7 +71,10 @@ class GlassDialog extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Padding(
+                  // Flexible, so a long message (or the keyboard) shrinks the
+                  // scrolling content — never the action row beneath it.
+                  Flexible(
+                    child: Padding(
                     padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
@@ -81,12 +87,13 @@ class GlassDialog extends StatelessWidget {
                         Flexible(
                           child: SingleChildScrollView(
                             child: DefaultTextStyle.merge(
-                              style: Type.footnote.colored(sys.secondaryLabel),
+                              style: Type.footnote.colored(sys.label),
                               child: content,
                             ),
                           ),
                         ),
                       ],
+                    ),
                     ),
                   ),
                   const Divider(),

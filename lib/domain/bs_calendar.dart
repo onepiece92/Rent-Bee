@@ -99,17 +99,98 @@ String dateLabel(DateTime date, CalendarMode mode) {
   if (mode == CalendarMode.ad) {
     return DateFormat('d MMM yyyy').format(date);
   }
-  final bs = date.toNepaliDateTime();
+  final bs = bsDate(date);
   return '${bs.day} ${BsCalendar.label(bs.month)} ${bs.year}';
+}
+
+// ---------------------------------------------------------------------------
+// Gregorian → BS, as pure calendar arithmetic
+// ---------------------------------------------------------------------------
+//
+// A [DateTime] in this app stands for a *calendar date* (its year/month/day),
+// not an instant. `DateTime.toNepaliDateTime()` from nepali_utils must not be
+// used for that: it converts the instant through "UTC + 5:45" and then
+// truncates a local-time day count, so on a device east of Nepal, or in any
+// daylight-saving zone, the first day of a BS month reads back as the last day
+// of the previous one. That made the anniversary raise re-apply on every
+// launch outside Nepal (buglog B01).
+//
+// The other direction — `NepaliDateTime(y, m, d).toDateTime()` — is plain
+// arithmetic on the BS calendar tables and is right in every zone. So the
+// Gregorian → BS conversion here is derived from it: find the BS month whose
+// first day is the latest one on or before the date.
+
+/// The range nepali_utils has calendar tables for.
+const _minBsYear = 1970, _maxBsYear = 2250;
+
+/// A zone-free day count for a Gregorian calendar date.
+int _dayNumber(int y, int m, int d) =>
+    DateTime.utc(y, m, d).millisecondsSinceEpoch ~/ Duration.millisecondsPerDay;
+
+final Map<int, int> _monthStartDays = {};
+
+/// Day number of the first day of BS ([year], [month]), memoised.
+int _monthStartDay(int year, int month) =>
+    _monthStartDays[year * 100 + month] ??= () {
+      final d = NepaliDateTime(year, month, 1).toDateTime();
+      return _dayNumber(d.year, d.month, d.day);
+    }();
+
+/// The Bikram Sambat date of the Gregorian calendar date [date] — the same
+/// answer on every device, whatever its time zone. Dates outside the
+/// supported BS range clamp to its first / last month rather than throwing,
+/// so one bad stored date can't take the app down.
+({int year, int month, int day}) bsDate(DateTime date) {
+  final target = _dayNumber(date.year, date.month, date.day);
+  if (target <= _monthStartDay(_minBsYear, 1)) {
+    return (year: _minBsYear, month: 1, day: 1);
+  }
+  // BS new year falls in mid-April, so AD + 57 is the BS year from then on
+  // (and one too many before it — the walk back below corrects that).
+  var y = (date.year + 57).clamp(_minBsYear, _maxBsYear);
+  var m = 1;
+  while (_monthStartDay(y, m) > target) {
+    if (m == 1) {
+      y--;
+      m = 12;
+    } else {
+      m--;
+    }
+  }
+  while (true) {
+    final ny = m == 12 ? y + 1 : y;
+    final nm = m == 12 ? 1 : m + 1;
+    if (ny > _maxBsYear || _monthStartDay(ny, nm) > target) break;
+    y = ny;
+    m = nm;
+  }
+  return (year: y, month: m, day: target - _monthStartDay(y, m) + 1);
 }
 
 /// The Bikram Sambat (year, month) a Gregorian [date] falls in. Used by the
 /// annual lease escalation to anchor each unit's anniversary to its start month.
 ({int year, int month}) bsYearMonth(DateTime date) {
-  final n = date.toNepaliDateTime();
+  final n = bsDate(date);
   return (year: n.year, month: n.month);
 }
 
 /// Gregorian DateTime for the first day of BS ([year], [month]).
 DateTime adForBsMonthStart(int year, int month) =>
     NepaliDateTime(year, month, 1).toDateTime();
+
+/// The date stamped on a unit as "last raised" for the anniversary in BS
+/// ([year], [month]): the **15th at noon**, not the 1st at midnight. The
+/// stamp is stored and synced as an instant, so a device in another time zone
+/// can read it a day early or late; from mid-month that still lands in the
+/// same BS month, which is all the stamp has to say.
+DateTime raiseStampFor(int year, int month) {
+  final d = NepaliDateTime(year, month, 15).toDateTime();
+  return DateTime(d.year, d.month, d.day, 12);
+}
+
+/// The BS (year, month) a "last raised" [stamp] stands for. Tolerant of
+/// stamps written the old way (the 1st at local midnight) and then read in a
+/// zone where that instant is still the previous day: nudging two days
+/// forward puts those back in their month and leaves mid-month stamps alone.
+({int year, int month}) bsMonthOfRaiseStamp(DateTime stamp) =>
+    bsYearMonth(stamp.add(const Duration(days: 2)));

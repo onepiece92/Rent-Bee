@@ -17,7 +17,10 @@ class UnitsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sys = Sys.of(context);
-    final ledger = context.watch<LedgerProvider>();
+    // The directory depends on the loaded rows only — not on the Ledger's
+    // search text or filter — so rebuild per data load, not per notification.
+    context.select<LedgerProvider, int>((l) => l.dataRevision);
+    final ledger = context.read<LedgerProvider>();
     final currency = context.watch<SettingsProvider>().currency;
     final units = ledger.allUnitsByCode;
     final activeRent = units
@@ -103,43 +106,57 @@ class UnitsScreen extends StatelessWidget {
                           child: Padding(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: Sys.gutter, vertical: 12),
-                            child: Row(
-                              children: [
-                                CodeAvatar(code: s.code, paid: false),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(s.tenantName,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: Type.body.semibold
-                                              .colored(sys.label)),
-                                      Text(
-                                        s.businessType.isEmpty
-                                            ? '—'
-                                            : s.businessType,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: Type.footnote
-                                            .colored(sys.secondaryLabel),
-                                      ),
-                                    ],
+                            child: SplitRow(
+                              leading: CodeAvatar(code: s.code, paid: false),
+                              title: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(s.tenantName,
+                                      maxLines: TextSize.large(context) ? 2 : 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Type.body.semibold
+                                          .colored(sys.label)),
+                                  Text(
+                                    s.businessType.isEmpty
+                                        ? '—'
+                                        : s.businessType,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Type.footnote
+                                        .colored(sys.secondaryLabel),
                                   ),
-                                ),
-                                const SizedBox(width: 10),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    Text(Money.format(s.monthlyRent, currency),
-                                        style: Type.subhead.semibold.tabular
-                                            .colored(sys.label)),
-                                    const SizedBox(height: 6),
-                                    _ActiveBadge(active: s.isActive),
-                                  ],
-                                ),
-                              ],
+                                ],
+                              ),
+                              trailing: (context, stacked) {
+                                final rent = Text(
+                                    Money.format(s.monthlyRent, currency),
+                                    style: Type.subhead.semibold.tabular
+                                        .colored(sys.label));
+                                final badge = _ActiveBadge(active: s.isActive);
+                                // Under the name at large text sizes; at the
+                                // trailing edge otherwise.
+                                return stacked
+                                    ? Wrap(
+                                        alignment: WrapAlignment.spaceBetween,
+                                        crossAxisAlignment:
+                                            WrapCrossAlignment.center,
+                                        spacing: 12,
+                                        runSpacing: 6,
+                                        children: [rent, badge],
+                                      )
+                                    : Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.end,
+                                        children: [
+                                          FittedBox(
+                                              fit: BoxFit.scaleDown,
+                                              child: rent),
+                                          const SizedBox(height: 6),
+                                          badge,
+                                        ],
+                                      );
+                              },
                             ),
                           ),
                         ),

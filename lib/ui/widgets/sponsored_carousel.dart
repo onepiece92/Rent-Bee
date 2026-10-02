@@ -194,39 +194,45 @@ class _SponsorCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sys = Sys.of(context);
+    // The strip has a fixed height (it pages sideways), so its two lines
+    // stop growing at the large sizes.
     return GroupedCard.tile(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       borderRadius: BorderRadius.circular(Sys.radiusWell),
       onTap: onTap,
-      child: Row(
-        children: [
-          IconTile(icon: sponsor.icon, color: sys.tint, size: 36),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  sponsor.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Type.subhead.semibold.colored(sys.label),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  sponsor.tagline,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Type.footnote.colored(sys.secondaryLabel),
-                ),
-              ],
-            ),
+      child: TextSize.capped(_content(sys)),
+    );
+  }
+
+  Widget _content(Sys sys) {
+    return Row(
+      children: [
+        IconTile(icon: sponsor.icon, color: sys.tint, size: 36),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                sponsor.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Type.subhead.semibold.colored(sys.label),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                sponsor.tagline,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Type.footnote.colored(sys.secondaryLabel),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          Icon(Icons.open_in_new_rounded, size: 16, color: sys.tintText),
-        ],
-      ),
+        ),
+        const SizedBox(width: 8),
+        Icon(Icons.open_in_new_rounded, size: 16, color: sys.tintText),
+      ],
     );
   }
 }

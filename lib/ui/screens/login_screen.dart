@@ -1,14 +1,21 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/theme.dart';
 import '../../state/auth_provider.dart';
 import '../widgets/glass.dart';
+import '../widgets/glass_dialog.dart';
 import '../widgets/pin_field.dart';
 
 /// Returning-user unlock. The PIN was set once during onboarding (after phone
 /// OTP verification); this screen runs fully offline. First-run PIN creation
 /// lives in [SetPinScreen].
+///
+/// Wrong PINs are limited ([AuthProvider.freeAttempts], then growing
+/// timeouts shown as a countdown), and "Forgot PIN?" resets the PIN by
+/// verifying the recorded phone number again.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -21,13 +28,63 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _error;
   bool _busy = false;
 
+  /// Ticks once a second while the lock screen is timed out, to count down.
+  Timer? _countdown;
+
+  @override
+  void initState() {
+    super.initState();
+    _watchLockout(context.read<AuthProvider>());
+  }
+
   @override
   void dispose() {
+    _countdown?.cancel();
     _pin.dispose();
     super.dispose();
   }
 
+  void _watchLockout(AuthProvider auth) {
+    if (auth.lockoutRemaining <= Duration.zero || _countdown != null) return;
+    _countdown = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (auth.lockoutRemaining <= Duration.zero) {
+        t.cancel();
+        _countdown = null;
+      }
+      if (mounted) setState(() {});
+    });
+  }
+
+  static String _clock(Duration d) {
+    // Round up: "0:00" must never be shown while input is still refused.
+    final s = (d.inMilliseconds / 1000).ceil();
+    return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _forgotPin(AuthProvider auth) async {
+    final ok = await showGlassDialog<bool>(
+      context,
+      (ctx) => GlassDialog(
+        title: 'Reset your PIN?',
+        content: Text(
+          'We will text a code to ${auth.phone} to confirm it is you, then '
+          'you can choose a new PIN. Your units and payments are not '
+          'changed.',
+          textAlign: TextAlign.center,
+        ),
+        actions: [
+          GlassDialogAction('Cancel',
+              onPressed: () => Navigator.pop(ctx, false)),
+          GlassDialogAction('Continue',
+              primary: true, onPressed: () => Navigator.pop(ctx, true)),
+        ],
+      ),
+    );
+    if (ok == true) auth.startPinReset(); // go_router moves to verification
+  }
+
   Future<void> _submit(AuthProvider auth) async {
+    if (auth.lockoutRemaining > Duration.zero) return;
     setState(() {
       _error = null;
       _busy = true;
@@ -43,10 +100,18 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final ok = await auth.unlock(pin);
       if (!ok && mounted) {
+        final left = AuthProvider.freeAttempts - auth.failedAttempts;
+        _pin.clear();
         setState(() {
-          _error = 'Incorrect PIN';
+          // Once timed out, the countdown below says everything.
+          _error = auth.lockoutRemaining > Duration.zero
+              ? null
+              : left > 0 && left <= 2
+                  ? 'Incorrect PIN · $left ${left == 1 ? 'try' : 'tries'} left'
+                  : 'Incorrect PIN';
           _busy = false;
         });
+        _watchLockout(auth);
       }
       // On success, go_router redirects on the auth change and disposes this
       // screen — leaving _busy true is fine since the button is gone.
@@ -66,6 +131,8 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final sys = Sys.of(context);
     final auth = context.watch<AuthProvider>();
+    final wait = auth.lockoutRemaining;
+    final lockedOut = wait > Duration.zero;
 
     return Scaffold(
       body: PageBackground(
@@ -99,9 +166,17 @@ class _LoginScreenState extends State<LoginScreen> {
                         controller: _pin,
                         label: 'PIN',
                         autofocus: true,
-                        onSubmitted: _busy ? null : () => _submit(auth),
+                        onSubmitted:
+                            _busy || lockedOut ? null : () => _submit(auth),
                       ),
-                      if (_error != null) ...[
+                      if (lockedOut) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          'Too many wrong PINs. Try again in ${_clock(wait)}.',
+                          textAlign: TextAlign.center,
+                          style: Type.footnote.colored(sys.redText).tabular,
+                        ),
+                      ] else if (_error != null) ...[
                         const SizedBox(height: 12),
                         Text(_error!,
                             textAlign: TextAlign.center,
@@ -111,9 +186,20 @@ class _LoginScreenState extends State<LoginScreen> {
                       // Stays a FilledButton: the theme renders it as the
                       // prominent capsule, and the widget tests find it by type.
                       FilledButton(
-                        onPressed: _busy ? null : () => _submit(auth),
+                        onPressed:
+                            _busy || lockedOut ? null : () => _submit(auth),
                         child: const Text('Unlock'),
                       ),
+                      if (auth.canResetPin) ...[
+                        const SizedBox(height: 8),
+                        Center(
+                          child: AppButton(
+                            kind: ButtonKind.plain,
+                            label: 'Forgot PIN?',
+                            onTap: () => _forgotPin(auth),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

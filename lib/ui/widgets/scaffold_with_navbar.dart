@@ -85,15 +85,19 @@ class _TabBar extends StatelessWidget {
           Sys.gutter, 0, Sys.gutter, bottomInset > 8 ? bottomInset : 8),
       child: Glass(
         padding: const EdgeInsets.all(6),
-        child: Row(
-          children: [
-            for (final d in _dests)
-              _TabItem(
-                dest: d,
-                selected: currentIndex == d.branch,
-                onTap: () => onSelect(d.branch),
-              ),
-          ],
+        // A bar has a fixed height: its labels stop growing at the large
+        // sizes, as an iOS tab bar's do.
+        child: TextSize.capped(
+          Row(
+            children: [
+              for (final d in _dests)
+                _TabItem(
+                  dest: d,
+                  selected: currentIndex == d.branch,
+                  onTap: () => onSelect(d.branch),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -128,8 +132,13 @@ class _TabItem extends StatelessWidget {
                   Icon(selected ? dest.selectedIcon : dest.icon,
                       size: 24, color: color),
                   const SizedBox(height: 3),
-                  Text(dest.label,
-                      style: Type.caption2.semibold.colored(color)),
+                  // One line, shrinking if a label outgrows its tab.
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(dest.label,
+                        maxLines: 1,
+                        style: Type.caption2.semibold.colored(color)),
+                  ),
                 ],
               ),
             ),

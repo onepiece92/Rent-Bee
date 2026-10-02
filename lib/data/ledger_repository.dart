@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:csv/csv.dart';
@@ -9,6 +10,7 @@ import '../domain/bs_calendar.dart';
 import '../domain/models.dart';
 import 'database.dart';
 import 'firestore_sync_service.dart';
+import 'sync_types.dart';
 
 /// All persistence + business logic (§4) lives here, on top of Drift.
 ///
@@ -59,13 +61,13 @@ class LedgerRepository {
     final id = await _insertUnitLocal(entry);
     final unit =
         await (db.select(db.units)..where((u) => u.id.equals(id))).getSingle();
-    sync?.upsertUnit(unit);
+    await _queueUnit(unit.cloudId);
     return id;
   }
 
   Future<void> updateUnit(Unit unit) async {
     await db.update(db.units).replace(unit);
-    sync?.upsertUnit(unit);
+    await _queueUnit(unit.cloudId);
   }
 
   /// Deleting a unit cascades its payment history.
@@ -73,8 +75,142 @@ class LedgerRepository {
     final unit = await (db.select(db.units)..where((u) => u.id.equals(id)))
         .getSingleOrNull();
     await (db.delete(db.units)..where((s) => s.id.equals(id))).go();
-    final cloudId = unit?.cloudId;
-    if (cloudId != null) sync?.deleteUnit(cloudId);
+    await _queueUnit(unit?.cloudId);
+  }
+
+  // ---- Outbox (see [PendingPushes]) --------------------------------------
+  //
+  // Every local change goes through [_queue]: it records the changed keys in
+  // the outbox and hands them to the cloud mirror, if one is attached. The
+  // mirror pushes the *current* local row for each key and clears the outbox
+  // row once the cloud acknowledges it. Until then the key is "pending", and
+  // a pull never overwrites or deletes a pending row (see [applyRemote]).
+
+  int _lastSeq = 0;
+
+  /// A strictly increasing sequence number for outbox rows.
+  int _nextSeq() {
+    final now = DateTime.now().microsecondsSinceEpoch;
+    return _lastSeq = now > _lastSeq ? now : _lastSeq + 1;
+  }
+
+  Future<void> _queue(List<SyncKey> keys) async {
+    if (keys.isEmpty) return;
+    final held = Zone.current[_heldKeys];
+    if (held is Set<SyncKey>) {
+      held.addAll(keys); // inside [_atomically]: recorded once, at commit
+      return;
+    }
+    final seq = _nextSeq();
+    await _record(keys, seq);
+    sync?.push(keys, seq);
+  }
+
+  Future<void> _record(Iterable<SyncKey> keys, int seq) async {
+    await db.batch((b) {
+      for (final k in keys) {
+        b.insert(
+          db.pendingPushes,
+          PendingPushesCompanion.insert(
+            kind: k.kind,
+            cloudId: k.cloudId,
+            year: Value(k.year),
+            month: Value(k.month),
+            seq: seq,
+          ),
+          mode: InsertMode.insertOrReplace,
+        );
+      }
+    });
+  }
+
+  static final _heldKeys = Object();
+
+  /// Runs a multi-row change as one unit: every write in [body] — through the
+  /// ordinary mutators — lands in a single transaction together with its
+  /// outbox rows, and the cloud is told only after the commit. If anything
+  /// throws, nothing was written here and nothing was pushed.
+  Future<T> _atomically<T>(Future<T> Function() body) async {
+    final keys = <SyncKey>{};
+    var seq = 0;
+    final result = await runZoned(
+      () => db.transaction(() async {
+        final r = await body();
+        if (keys.isNotEmpty) await _record(keys, seq = _nextSeq());
+        return r;
+      }),
+      zoneValues: {_heldKeys: keys},
+    );
+    if (keys.isNotEmpty) sync?.push(keys.toList(), seq);
+    return result;
+  }
+
+  Future<void> _queueUnit(String? cloudId) async {
+    if (cloudId != null) await _queue([SyncKey.unit(cloudId)]);
+  }
+
+  Future<void> _queuePayment(int unitId, int year, int month,
+      {String? cloudId}) async {
+    final cid = cloudId ?? await cloudIdForUnitId(unitId);
+    if (cid != null) await _queue([SyncKey.payment(cid, year, month)]);
+  }
+
+  Future<void> _queueCharge(int unitId, int year, int month) async {
+    final cid = await cloudIdForUnitId(unitId);
+    if (cid != null) await _queue([SyncKey.charge(cid, year, month)]);
+  }
+
+  /// Queues [keys] for a push — for the cloud mirror, which learns during a
+  /// pull that some rows exist only on this device.
+  Future<void> queueKeys(List<SyncKey> keys) => _queue(keys);
+
+  /// Everything changed locally that the cloud has not acknowledged yet.
+  Future<List<PendingPush>> pendingPushes() =>
+      db.select(db.pendingPushes).get();
+
+  /// Clears the outbox rows for [keys] once the cloud has acknowledged a push
+  /// that started at [seq]. A key queued again since then carries a newer
+  /// sequence number and stays pending.
+  Future<void> clearPending(Iterable<SyncKey> keys, int seq) => db.batch((b) {
+        for (final k in keys) {
+          b.deleteWhere(
+              db.pendingPushes,
+              (t) =>
+                  t.kind.equals(k.kind) &
+                  t.cloudId.equals(k.cloudId) &
+                  t.year.equals(k.year) &
+                  t.month.equals(k.month) &
+                  t.seq.isSmallerOrEqualValue(seq));
+        }
+      });
+
+  /// After a whole-ledger replace is acknowledged: everything queued up to
+  /// [seq] is covered by it.
+  Future<void> clearAllPending(int seq) => (db.delete(db.pendingPushes)
+        ..where((t) => t.seq.isSmallerOrEqualValue(seq)))
+      .go();
+
+  // ---- Current local state by sync key (what a push sends) ---------------
+
+  Future<Unit?> unitByCloudId(String cloudId) =>
+      (db.select(db.units)..where((t) => t.cloudId.equals(cloudId)))
+          .getSingleOrNull();
+
+  Future<Payment?> paymentByKey(SyncKey k) async {
+    final unitId = await localUnitIdForCloudId(k.cloudId);
+    if (unitId == null) return null;
+    return (db.select(db.payments)
+          ..where((p) =>
+              p.unitId.equals(unitId) &
+              p.year.equals(k.year) &
+              p.month.equals(k.month)))
+        .getSingleOrNull();
+  }
+
+  Future<Charge?> chargeByKey(SyncKey k) async {
+    final unitId = await localUnitIdForCloudId(k.cloudId);
+    if (unitId == null) return null;
+    return chargesFor(unitId, k.year, k.month);
   }
 
   /// Applies the automatic annual lease escalation. Each **active** unit with a
@@ -103,7 +239,10 @@ class LedgerRepository {
     for (final u in units) {
       if (!u.isActive || u.startedOn == null) continue;
       final startBs = bsYearMonth(u.startedOn!);
-      final anchorBs = bsYearMonth(u.lastRaisedOn ?? u.startedOn!);
+      // The stamp is read tolerantly (see [bsMonthOfRaiseStamp]): it is an
+      // instant that another device, in another time zone, may see a day off.
+      final last = u.lastRaisedOn;
+      final anchorBs = last != null ? bsMonthOfRaiseStamp(last) : startBs;
 
       // Latest BS year whose anniversary month (startBs.month) has arrived…
       final latestAnniversaryYear =
@@ -119,8 +258,9 @@ class LedgerRepository {
       for (var i = 0; i < dueYears; i++) {
         rent = ((rent * (100 + percent)) / 100).round();
       }
-      // Stamp the latest applied anniversary (1st of the BS start month).
-      final stamp = adForBsMonthStart(latestAnniversaryYear, startBs.month);
+      // Stamp the latest applied anniversary: mid-month, so the stamp names
+      // the same BS month on every device (buglog B01).
+      final stamp = raiseStampFor(latestAnniversaryYear, startBs.month);
       updated.add(u.copyWith(monthlyRent: rent, lastRaisedOn: Value(stamp)));
     }
 
@@ -130,7 +270,10 @@ class LedgerRepository {
           b.replace(db.units, u);
         }
       });
-      sync?.upsertUnits(updated);
+      await _queue([
+        for (final u in updated)
+          if (u.cloudId != null) SyncKey.unit(u.cloudId!),
+      ]);
     }
     return updated.length;
   }
@@ -156,10 +299,22 @@ class LedgerRepository {
 
   /// Units joined with their payment (if any) for the month, sorted
   /// pending-first then paid (§4 "List sort").
-  Future<List<UnitRow>> rowsForMonth(int year, int month) async {
+  Future<List<UnitRow>> rowsForMonth(int year, int month,
+      {double percent = 0}) async {
     final (units, payments, charges) = await _monthReads(year, month);
-    return _rowsFrom(units, payments, charges);
+    return _rowsFrom(units, payments, charges, year, month, percent);
   }
+
+  /// The rent that applies to a unit in BS ([year], [month]) — the one rule
+  /// every screen prices a month by, so the Ledger, the unit sheet and Reports
+  /// can't disagree (buglog B05):
+  ///   1. the rent a recorded payment was made against, if there is one;
+  ///   2. otherwise the rent in effect that month ([RentSchedule.rentFor]:
+  ///      today's rent with later anniversary raises unwound; 0 before the
+  ///      tenant moved in).
+  static int _monthRent(
+          RentSchedule schedule, Payment? payment, int year, int month) =>
+      payment?.rentAtPayment ?? schedule.rentFor(year, month);
 
   /// The three independent reads behind a month view, issued together so the
   /// background DB isolate pipelines them into one round trip, not three.
@@ -171,20 +326,23 @@ class LedgerRepository {
   /// Build sorted [UnitRow]s from already-loaded units + that month's payments
   /// and charges rows (the latter carry each unit's utility charges and rent
   /// deduction, both of which feed the month's due).
-  List<UnitRow> _rowsFrom(
-      List<Unit> units, List<Payment> payments, List<Charge> charges) {
+  List<UnitRow> _rowsFrom(List<Unit> units, List<Payment> payments,
+      List<Charge> charges, int year, int month, double percent) {
     final byUnit = {for (final p in payments) p.unitId: p};
     final deductionByUnit = _deductionByUnit(charges);
     final chargesByUnit = _chargesByUnit(charges);
-    final rows = [
-      for (final s in units)
-        UnitRow(
-          unit: s,
-          payment: byUnit[s.id],
-          charges: chargesByUnit[s.id] ?? 0,
-          deduction: deductionByUnit[s.id] ?? 0,
-        ),
-    ];
+    final rows = <UnitRow>[];
+    for (final s in units) {
+      final schedule = RentSchedule(s, percent);
+      rows.add(UnitRow(
+        unit: s,
+        payment: byUnit[s.id],
+        charges: chargesByUnit[s.id] ?? 0,
+        deduction: deductionByUnit[s.id] ?? 0,
+        rent: _monthRent(schedule, byUnit[s.id], year, month),
+        started: schedule.startedBy(year, month),
+      ));
+    }
     rows.sort((a, b) {
       // active before vacant, so a moved-out unit never crowds the working
       // pending list; within active: pending (false) before paid (true)
@@ -198,12 +356,16 @@ class LedgerRepository {
   /// Rows **and** summary for a month from a single units+payments+charges
   /// load — used by the provider's refresh so a mark-paid/undo/edit re-queries
   /// the DB once (3 queries) instead of via rowsForMonth + summary (6 queries).
+  ///
+  /// [percent] is the active escalation rate, used to price a past month at
+  /// the rent in effect then.
   Future<({List<UnitRow> rows, MonthSummary summary})> monthView(
-      int year, int month) async {
+      int year, int month,
+      {double percent = 0}) async {
     final (units, payments, charges) = await _monthReads(year, month);
     return (
-      rows: _rowsFrom(units, payments, charges),
-      summary: _summaryFrom(units, payments, charges, year, month),
+      rows: _rowsFrom(units, payments, charges, year, month, percent),
+      summary: _summaryFrom(units, payments, charges, year, month, percent),
     );
   }
 
@@ -225,13 +387,20 @@ class LedgerRepository {
     DateTime? paidOn,
     PayMethod method = PayMethod.cash,
     String? note,
+    int? rent,
   }) async {
+    // [rent] is the rent that applies to this month — the row's `monthRent`,
+    // which the app always passes. It is stored on the payment so the month
+    // keeps being priced at what was actually charged. Without it nothing is
+    // stored (the current rent would be a wrong guess for a past month) and
+    // the month falls back to the rent reconstructed for it.
+    final monthRent = rent ?? unit.monthlyRent;
     // "Settle in full" means what's actually owed this month, not the headline
     // rent: utility charges come on top, goods taken from the shop come off
     // (see netDue).
     final chargeRow = await chargesFor(unit.id, year, month);
     final due = amount ??
-        netDue(unit.monthlyRent, chargeRow?.deduction ?? 0,
+        netDue(monthRent, chargeRow?.deduction ?? 0,
             charges: chargeRow == null ? 0 : _chargesTotal(chargeRow));
     // Nothing to record — rent 0, fully deducted, or an explicit blank: clear
     // the month rather than store an empty payment row that would sync to
@@ -245,11 +414,12 @@ class LedgerRepository {
       year: year,
       month: month,
       amount: due,
+      rentAtPayment: rent == null ? const Value.absent() : Value(rent),
       paidOn: Value(paidOn ?? DateTime.now()),
       method: Value(method),
       note: Value(note),
     ));
-    await _pushPaymentFor(unit.id, year, month);
+    await _queuePayment(unit.id, year, month, cloudId: unit.cloudId);
   }
 
   /// Insert-or-update a payment keyed by its `(unit, year, month)` unique index.
@@ -266,24 +436,10 @@ class LedgerRepository {
             ),
           );
 
-  /// Re-reads a payment + its unit's cloudId and pushes it to the cloud mirror.
-  Future<void> _pushPaymentFor(int unitId, int year, int month) async {
-    if (sync == null) return;
-    final cloudId = await cloudIdForUnitId(unitId);
-    if (cloudId == null) return;
-    final p = await (db.select(db.payments)
-          ..where((x) =>
-              x.unitId.equals(unitId) &
-              x.year.equals(year) &
-              x.month.equals(month)))
-        .getSingleOrNull();
-    if (p != null) sync!.upsertPayment(p, cloudId);
-  }
-
   /// Update an existing payment record's editable fields.
   Future<void> updatePayment(Payment payment) async {
     await db.update(db.payments).replace(payment);
-    await _pushPaymentFor(payment.unitId, payment.year, payment.month);
+    await _queuePayment(payment.unitId, payment.year, payment.month);
   }
 
   /// Undo: delete the row for (unit_id, year, month).
@@ -295,7 +451,7 @@ class LedgerRepository {
               p.year.equals(year) &
               p.month.equals(month)))
         .go();
-    if (cloudId != null) sync?.deletePayment(cloudId, year, month);
+    await _queuePayment(unitId, year, month, cloudId: cloudId);
   }
 
   // ---- Charges (variable per-month utility/service fees) -----------------
@@ -338,14 +494,6 @@ class LedgerRepository {
   /// unitId → that month's charges total, from one month's charges rows.
   static Map<int, int> _chargesByUnit(List<Charge> charges) =>
       {for (final c in charges) c.unitId: _chargesTotal(c)};
-
-  /// (unitId, month) → rent deduction, from charges rows within one BS year.
-  static Map<(int, int), int> _deductionByUnitMonth(List<Charge> charges) =>
-      {for (final c in charges) (c.unitId, c.month): c.deduction};
-
-  /// (unitId, month) → charges total, from charges rows within one BS year.
-  static Map<(int, int), int> _chargesByUnitMonth(List<Charge> charges) =>
-      {for (final c in charges) (c.unitId, c.month): _chargesTotal(c)};
 
   /// Insert-or-update this month's electricity/water/service charges for a unit
   /// (negatives floored at 0). The row's rent deduction is left as it was —
@@ -420,8 +568,7 @@ class LedgerRepository {
     final n = (d == 0 || note == null || note.isEmpty) ? null : note;
     if (e == 0 && w == 0 && s == 0 && d == 0) {
       await _deleteChargeLocal(unitId, year, month);
-      final cloudId = await cloudIdForUnitId(unitId);
-      if (cloudId != null) sync?.deleteCharge(cloudId, year, month);
+      await _queueCharge(unitId, year, month);
       return;
     }
     await _upsertChargeLocal(ChargesCompanion.insert(
@@ -434,7 +581,7 @@ class LedgerRepository {
       deduction: Value(d),
       deductionNote: Value(n),
     ));
-    await _pushChargeFor(unitId, year, month);
+    await _queueCharge(unitId, year, month);
   }
 
   Future<void> _deleteChargeLocal(int unitId, int year, int month) =>
@@ -455,19 +602,6 @@ class LedgerRepository {
               target: [db.charges.unitId, db.charges.year, db.charges.month],
             ),
           );
-
-  Future<void> _pushChargeFor(int unitId, int year, int month) async {
-    if (sync == null) return;
-    final cloudId = await cloudIdForUnitId(unitId);
-    if (cloudId == null) return;
-    final c = await (db.select(db.charges)
-          ..where((x) =>
-              x.unitId.equals(unitId) &
-              x.year.equals(year) &
-              x.month.equals(month)))
-        .getSingleOrNull();
-    if (c != null) sync!.upsertCharge(c, cloudId);
-  }
 
   // ---- Deposit -----------------------------------------------------------
 
@@ -519,9 +653,10 @@ class LedgerRepository {
 
   // ---- Reporting ---------------------------------------------------------
 
-  Future<MonthSummary> summary(int year, int month) async {
+  Future<MonthSummary> summary(int year, int month,
+      {double percent = 0}) async {
     final (units, payments, charges) = await _monthReads(year, month);
-    return _summaryFrom(units, payments, charges, year, month);
+    return _summaryFrom(units, payments, charges, year, month, percent);
   }
 
   /// Dashboard totals from already-loaded units + that month's payments and
@@ -532,15 +667,18 @@ class LedgerRepository {
   /// including from since-vacated units, so money actually received is never
   /// understated.
   MonthSummary _summaryFrom(List<Unit> units, List<Payment> payments,
-      List<Charge> charges, int year, int month) {
+      List<Charge> charges, int year, int month, double percent) {
     final active = units
         .where((s) => s.isActive && _startedBy(s, year, month))
         .toList();
     final deductionById = _deductionByUnit(charges);
     final chargesById = _chargesByUnit(charges);
+    final paymentById = {for (final p in payments) p.unitId: p};
     final dueById = {
       for (final s in active)
-        s.id: netDue(s.monthlyRent, deductionById[s.id] ?? 0,
+        s.id: netDue(
+            _monthRent(RentSchedule(s, percent), paymentById[s.id], year, month),
+            deductionById[s.id] ?? 0,
             charges: chargesById[s.id] ?? 0),
     };
 
@@ -556,8 +694,13 @@ class LedgerRepository {
     final collected = payments.fold<int>(0, (sum, p) => sum + p.amount);
     var paidCount = 0;
     var partialCount = 0;
+    // Still owed: each unit's own shortfall. Not `expected − collected` —
+    // `collected` includes vacated units and overpayments, which would cancel
+    // out another unit's unpaid rent (buglog B06).
+    var outstanding = 0;
     dueById.forEach((id, due) {
       final amt = paidById[id] ?? 0;
+      if (amt < due) outstanding += due - amt;
       if (settles(paid: amt, due: due, deduction: deductionById[id] ?? 0)) {
         paidCount++;
       } else if (amt > 0) {
@@ -571,6 +714,7 @@ class LedgerRepository {
       paidCount: paidCount,
       partialCount: partialCount,
       activeCount: active.length,
+      outstanding: outstanding,
     );
   }
 
@@ -580,45 +724,110 @@ class LedgerRepository {
   static int rentInEffect(Unit unit, int year, int month, double percent) =>
       RentSchedule(unit, percent).rentFor(year, month);
 
-  /// Aggregated totals for an inclusive BS month range within one year.
-  /// Works for any span: a single month (start == end) behaves like
-  /// [summary], a quarter (3 months), or a full year (1–12). [percent] is the
+  /// Aggregated totals for an inclusive BS month range within one year —
+  /// convenience form of [periodSummarySpan] for the common quarter/BS-year
+  /// scopes and existing call sites.
+  Future<PeriodSummary> periodSummary(
+          int year, int startMonth, int endMonth, {double percent = 0}) =>
+      periodSummarySpan(BsMonth(year, startMonth), BsMonth(year, endMonth),
+          percent: percent);
+
+  /// The one month-key both span queries and the aggregation share.
+  static int _monthKey(int year, int month) => year * 100 + month;
+
+  static bool _inSpan(int year, int month, BsMonth start, BsMonth end) {
+    final k = _monthKey(year, month);
+    return k >= _monthKey(start.year, start.month) &&
+        k <= _monthKey(end.year, end.month);
+  }
+
+  /// Payments for an inclusive span of BS months that may cross BS-year
+  /// boundaries (e.g. an AD calendar year, Magh → Poush). Mirrors
+  /// [history]'s pattern: bound the query to the span's years, filter the
+  /// exact months in memory.
+  Future<List<Payment>> paymentsForSpan(BsMonth start, BsMonth end) async {
+    final rows = await (db.select(db.payments)
+          ..where((p) => p.year.isBetweenValues(start.year, end.year)))
+        .get();
+    return [
+      for (final p in rows)
+        if (_inSpan(p.year, p.month, start, end)) p
+    ];
+  }
+
+  /// Charges rows for an inclusive span of BS months (see [paymentsForSpan]).
+  Future<List<Charge>> chargesForSpan(BsMonth start, BsMonth end) async {
+    final rows = await (db.select(db.charges)
+          ..where((c) => c.year.isBetweenValues(start.year, end.year)))
+        .get();
+    return [
+      for (final c in rows)
+        if (_inSpan(c.year, c.month, start, end)) c
+    ];
+  }
+
+  /// The inclusive run of BS months from [start] through [end].
+  static List<BsMonth> _spanMonths(BsMonth start, BsMonth end) {
+    final months = <BsMonth>[];
+    for (var m = start;; m = m.next()) {
+      months.add(m);
+      if (m == end) return months;
+      if (months.length > 36) {
+        throw ArgumentError('span end precedes start, or span exceeds 36 months');
+      }
+    }
+  }
+
+  /// Aggregated totals for any inclusive run of BS months, crossing BS-year
+  /// boundaries freely — a single month, a quarter, a BS year, or an AD
+  /// calendar year (which spans two BS years: Magh → Poush). [percent] is the
   /// active escalation rate, used to price historical months at the rent that
   /// applied then (see [rentInEffect]).
-  Future<PeriodSummary> periodSummary(
-      int year, int startMonth, int endMonth,
+  Future<PeriodSummary> periodSummarySpan(BsMonth start, BsMonth end,
       {double percent = 0}) async {
+    final months = _spanMonths(start, end);
     // ALL payments in range — including from since-vacated units, so the
     // period's `collected` reflects money actually received. Expected and
     // per-unit outstanding still cover active units only. The three reads are
     // independent, so they go to the DB isolate together.
     final (units, payments, charges) = await (
       allUnits(),
-      paymentsForRange(year, startMonth, endMonth),
-      chargesForRange(year, startMonth, endMonth),
+      paymentsForSpan(start, end),
+      chargesForSpan(start, end),
     ).wait;
     final active = units.where((s) => s.isActive).toList();
-    // Adjustments per (unit, month) — every month is priced at rent + its
-    // utility charges, net of its rent deduction.
-    final deductionByUnitMonth = _deductionByUnitMonth(charges);
-    final chargesByUnitMonth = _chargesByUnitMonth(charges);
+    // Adjustments per (unit, year, month) — every month is priced at rent +
+    // its utility charges, net of its rent deduction. Keys carry the year so
+    // the same month number in two BS years can't collide across a span.
+    final deductionByKey = {
+      for (final c in charges) (c.unitId, c.year, c.month): c.deduction
+    };
+    final chargesByKey = {
+      for (final c in charges) (c.unitId, c.year, c.month): _chargesTotal(c)
+    };
     // One schedule per unit: its BS anchors convert once for all the months.
     final schedules = {for (final s in active) s.id: RentSchedule(s, percent)};
-    int dueFor(Unit s, int m) {
+    // Amount paid per (unit, year, month) — partial payments included — and
+    // the payment row itself, for the rent it was made against.
+    final paidByKey = <(int, int, int), int>{};
+    final paymentByKey = <(int, int, int), Payment>{};
+    for (final p in payments) {
+      final k = (p.unitId, p.year, p.month);
+      paidByKey[k] = (paidByKey[k] ?? 0) + p.amount;
+      paymentByKey[k] = p;
+    }
+    // The month's rent: what a payment was made against, else the rent in
+    // effect then (see [_monthRent]).
+    int rentFor(Unit s, BsMonth m) => _monthRent(schedules[s.id]!,
+        paymentByKey[(s.id, m.year, m.month)], m.year, m.month);
+    int dueFor(Unit s, BsMonth m) {
       final schedule = schedules[s.id]!;
       // Adjustments on a month before the tenant moved in must not create a
       // phantom due — nothing was owed then (mirrors history()).
-      if (!schedule.startedBy(year, m)) return 0;
-      return netDue(schedule.rentFor(year, m),
-          deductionByUnitMonth[(s.id, m)] ?? 0,
-          charges: chargesByUnitMonth[(s.id, m)] ?? 0);
-    }
-
-    // Amount paid per (unit, month) — partial payments included.
-    final paidByUnitMonth = <int, Map<int, int>>{};
-    for (final p in payments) {
-      final byMonth = (paidByUnitMonth[p.unitId] ??= <int, int>{});
-      byMonth[p.month] = (byMonth[p.month] ?? 0) + p.amount;
+      if (!schedule.startedBy(m.year, m.month)) return 0;
+      return netDue(rentFor(s, m),
+          deductionByKey[(s.id, m.year, m.month)] ?? 0,
+          charges: chargesByKey[(s.id, m.year, m.month)] ?? 0);
     }
 
     // Per-month breakdown — expected uses the rent in effect THAT month for
@@ -629,29 +838,34 @@ class LedgerRepository {
     final buckets = <MonthBucket>[];
     var totalExpected = 0;
     var rentExpected = 0, chargesExpected = 0, deductionsTotal = 0;
-    for (var m = startMonth; m <= endMonth; m++) {
+    for (final m in months) {
       var monthExpected = 0;
+      var monthOutstanding = 0;
       for (final s in active) {
         final schedule = schedules[s.id]!;
-        if (!schedule.startedBy(year, m)) continue;
-        final rent = schedule.rentFor(year, m);
-        final monthCharges = chargesByUnitMonth[(s.id, m)] ?? 0;
-        final deduction = deductionByUnitMonth[(s.id, m)] ?? 0;
+        if (!schedule.startedBy(m.year, m.month)) continue;
+        final rent = rentFor(s, m);
+        final monthCharges = chargesByKey[(s.id, m.year, m.month)] ?? 0;
+        final deduction = deductionByKey[(s.id, m.year, m.month)] ?? 0;
         final capped =
             deduction > rent + monthCharges ? rent + monthCharges : deduction;
         rentExpected += rent;
         chargesExpected += monthCharges;
         deductionsTotal += capped < 0 ? 0 : capped;
-        monthExpected += dueFor(s, m);
+        final due = dueFor(s, m);
+        monthExpected += due;
+        final paid = paidByKey[(s.id, m.year, m.month)] ?? 0;
+        if (paid < due) monthOutstanding += due - paid;
       }
       final collected = payments
-          .where((p) => p.month == m)
+          .where((p) => p.year == m.year && p.month == m.month)
           .fold<int>(0, (sum, p) => sum + p.amount);
       buckets.add(MonthBucket(
-        year: year,
-        month: m,
+        year: m.year,
+        month: m.month,
         expected: monthExpected,
         collected: collected,
+        outstanding: monthOutstanding,
       ));
       totalExpected += monthExpected;
     }
@@ -667,26 +881,26 @@ class LedgerRepository {
     var paidSlots = 0;
     var startedSlots = 0;
     for (final s in active) {
-      final byMonth = paidByUnitMonth[s.id] ?? const <int, int>{};
       var owed = 0;
-      var monthsUnpaid = 0;
-      for (var m = startMonth; m <= endMonth; m++) {
-        if (!schedules[s.id]!.startedBy(year, m)) continue;
+      final unpaid = <BsMonth>[];
+      for (final m in months) {
+        if (!schedules[s.id]!.startedBy(m.year, m.month)) continue;
         startedSlots++;
         final due = dueFor(s, m);
-        final paid = byMonth[m] ?? 0;
+        final paid = paidByKey[(s.id, m.year, m.month)] ?? 0;
         if (paid >= due) {
           paidSlots++;
         } else {
           owed += due - paid; // full or partial shortfall at the month's rate
-          monthsUnpaid++;
+          unpaid.add(m);
         }
       }
       if (owed > 0) {
         outstanding.add(PeriodDebt(
           unit: s,
           amountOwed: owed,
-          monthsUnpaid: monthsUnpaid,
+          monthsUnpaid: unpaid.length,
+          unpaidMonths: unpaid,
         ));
       }
     }
@@ -740,7 +954,7 @@ class LedgerRepository {
           .get(),
     ).wait;
     if (unit == null) return const [];
-    final amountByMonth = {for (final p in paid) (p.year, p.month): p.amount};
+    final paymentByMonth = {for (final p in paid) (p.year, p.month): p};
     final deductionByMonth = {
       for (final c in charges) (c.year, c.month): c.deduction
     };
@@ -761,8 +975,11 @@ class LedgerRepository {
       entries.add(HistoryEntry(
         year: cursor.year,
         month: cursor.month,
-        amount: amountByMonth[key] ?? 0,
-        expected: netDue(schedule.rentFor(cursor.year, cursor.month), deduction,
+        amount: paymentByMonth[key]?.amount ?? 0,
+        expected: netDue(
+            _monthRent(
+                schedule, paymentByMonth[key], cursor.year, cursor.month),
+            deduction,
             charges: monthCharges),
         deduction: deduction,
       ));
@@ -776,37 +993,46 @@ class LedgerRepository {
   /// same month as start and end (this is the only CSV export path; the UI uses
   /// it for month, quarter, and year scopes). The `year` column keeps the
   /// round-trip year-safe.
-  Future<String> exportCsvRange(
-      int year, int startMonth, int endMonth) async {
+  Future<String> exportCsvRange(int year, int startMonth, int endMonth) =>
+      exportCsvSpan(BsMonth(year, startMonth), BsMonth(year, endMonth));
+
+  /// Span form of [exportCsvRange]: any inclusive run of BS months, crossing
+  /// BS-year boundaries freely (the AD calendar-year report needs Magh →
+  /// Poush). Every row carries its own `year`, so the round-trip is safe.
+  Future<String> exportCsvSpan(BsMonth start, BsMonth end) async {
     // One units load + one ranged payments query (was rowsForMonth per month —
     // e.g. 24 queries for a full year). The `year` column makes the round-trip
     // year-safe: importCsv reads it instead of falling back to the open year.
     final (allU, payments, charges) = await (
       allUnits(),
-      paymentsForRange(year, startMonth, endMonth),
-      chargesForRange(year, startMonth, endMonth),
+      paymentsForSpan(start, end),
+      chargesForSpan(start, end),
     ).wait;
     final units = [...allU]..sort((a, b) => a.code.compareTo(b.code));
-    final byKey = {for (final p in payments) (p.unitId, p.month): p};
+    final byKey = {for (final p in payments) (p.unitId, p.year, p.month): p};
     // `rent` stays the unit's headline rent (importCsv reads it back as
     // monthly_rent); the month's deduction and utility charges travel in their
     // own columns so a month settled with either still round-trips as paid.
-    final chargeByKey = {for (final c in charges) (c.unitId, c.month): c};
+    final chargeByKey = {
+      for (final c in charges) (c.unitId, c.year, c.month): c
+    };
     final buf = StringBuffer()
       ..writeln('month,year,code,tenant,rent,status,paid_on,method,amount,'
           'deduction,electricity,water,service');
-    for (var m = startMonth; m <= endMonth; m++) {
-      final monthLabel = BsCalendar.label(m);
+    for (final m in _spanMonths(start, end)) {
+      final monthLabel = BsCalendar.label(m.month);
       for (final s in units) {
-        final charge = chargeByKey[(s.id, m)];
+        final charge = chargeByKey[(s.id, m.year, m.month)];
         final r = UnitRow(
           unit: s,
-          payment: byKey[(s.id, m)],
+          payment: byKey[(s.id, m.year, m.month)],
           charges: charge == null ? 0 : _chargesTotal(charge),
           deduction: charge?.deduction ?? 0,
+          // The status column follows the rent the payment was made against.
+          rent: byKey[(s.id, m.year, m.month)]?.rentAtPayment,
         );
         buf.writeln(
-            _csvRow(r, charge: charge, monthLabel: monthLabel, year: year));
+            _csvRow(r, charge: charge, monthLabel: monthLabel, year: m.year));
       }
     }
     return buf.toString();
@@ -863,7 +1089,29 @@ class LedgerRepository {
   /// [fallbackYear] (single-year files import into the selected year).
   /// Existing data not referenced by the file is left untouched. Returns the
   /// number of units added/updated and payments written.
+  ///
+  /// All or nothing: a file that fails part-way leaves the ledger (and the
+  /// cloud copy) exactly as it was — never half a file merged in.
   Future<({int unitsAdded, int unitsUpdated, int payments})> importCsv(
+    String content, {
+    required int fallbackYear,
+  }) =>
+      _atomically(() => _importCsv(content, fallbackYear: fallbackYear));
+
+  /// Text of a picked CSV file. Strict: a file that is not UTF-8 (Excel's
+  /// plain "CSV" on Windows, or "Unicode Text") is refused with a way out,
+  /// instead of being imported with tenant names turned into "\uFFFD" marks.
+  static String decodeCsv(List<int> bytes) {
+    try {
+      return utf8.decode(bytes);
+    } on FormatException {
+      throw const FormatException(
+          'This file is not saved as UTF-8, so names in it would be damaged. '
+          'Save it again as "CSV UTF-8" and retry.');
+    }
+  }
+
+  Future<({int unitsAdded, int unitsUpdated, int payments})> _importCsv(
     String content, {
     required int fallbackYear,
   }) async {
@@ -969,7 +1217,7 @@ class LedgerRepository {
           paidOn: Value(_parsePaidOn(cell(iPaidOn))),
           method: Value(_method(cell(iMethod))),
         ));
-        await _pushPaymentFor(unitId, pYear, monthNum);
+        await _queuePayment(unitId, pYear, monthNum);
         payments++;
       }
     }
@@ -1096,6 +1344,28 @@ class LedgerRepository {
     return const JsonEncoder.withIndent('  ').convert(data);
   }
 
+  /// Reads what a backup file contains without changing anything — so the
+  /// restore dialog can say what is about to replace the ledger, and refuse a
+  /// file that would leave it empty. Throws [FormatException] for anything
+  /// that isn't a Rent Bee backup.
+  static ({int units, int payments, int charges, DateTime? exportedAt})
+      inspectBackup(String content) {
+    final Object? decoded = jsonDecode(content);
+    if (decoded is! Map<String, dynamic> ||
+        decoded['app'] != 'rent-bee' ||
+        decoded['type'] != 'backup') {
+      throw const FormatException(
+          'Not a Rent Bee backup file (expected a JSON backup export).');
+    }
+    int count(String key) => (decoded[key] as List?)?.length ?? 0;
+    return (
+      units: count('units'),
+      payments: count('payments'),
+      charges: count('charges'),
+      exportedAt: _date(decoded['exportedAt']),
+    );
+  }
+
   /// Restores an [exportBackupJson] snapshot, **replacing all current data**.
   /// Atomic: the whole local rebuild runs in one drift transaction, so a
   /// malformed row throws and rolls back, leaving the existing ledger intact.
@@ -1151,19 +1421,7 @@ class LedgerRepository {
     });
 
     // One sequenced cloud replace for the whole restored dataset.
-    if (sync != null) {
-      final allU = await allUnits();
-      final map = {
-        for (final u in allU)
-          if (u.cloudId != null) u.id: u.cloudId!,
-      };
-      sync!.replaceAllCloud(
-        units: allU,
-        payments: await allPayments(),
-        charges: await allCharges(),
-        cloudIdByUnitId: map,
-      );
-    }
+    await _queue(const [SyncKey.all()]);
     return result;
   }
 
@@ -1194,6 +1452,7 @@ class LedgerRepository {
         'year': p.year,
         'month': p.month,
         'amount': p.amount,
+        'rentAtPayment': p.rentAtPayment,
         'paidOn': _iso(p.paidOn),
         'method': p.method.name,
         'note': p.note,
@@ -1240,6 +1499,7 @@ class LedgerRepository {
         year: (m['year'] as num).toInt(),
         month: (m['month'] as num).toInt(),
         amount: (m['amount'] as num).toInt(),
+        rentAtPayment: Value((m['rentAtPayment'] as num?)?.toInt()),
         paidOn: Value(_date(m['paidOn'])),
         method: Value(_method(m['method'] as String? ?? '')),
         note: Value(m['note'] as String?),
@@ -1262,22 +1522,13 @@ class LedgerRepository {
   /// True when a cloud-sync session is live (signed-in, non-guest owner).
   bool get cloudSyncActive => sync != null;
 
-  /// Forces a full re-push of the whole local ledger to the cloud in one
-  /// sequenced erase-then-write. Used by the manual "Back up to cloud now"
-  /// action (and after a long offline stretch); a no-op when not signed in.
+  /// Forces a full re-push of the whole local ledger to the cloud: every
+  /// local row is written, then cloud documents with no local counterpart are
+  /// removed. Used by the manual "Back up to cloud now" action; a no-op when
+  /// not signed in.
   Future<void> resyncAllToCloud() async {
-    final s = sync;
-    if (s == null) return;
-    final units = await allUnits();
-    s.replaceAllCloud(
-      units: units,
-      payments: await allPayments(),
-      charges: await allCharges(),
-      cloudIdByUnitId: {
-        for (final u in units)
-          if (u.cloudId != null) u.id: u.cloudId!,
-      },
-    );
+    if (sync == null) return;
+    await _queue(const [SyncKey.all()]);
   }
 
   // ---- Seed / demo / reset -----------------------------------------------
@@ -1350,7 +1601,7 @@ class LedgerRepository {
         monthlyRent: _rentAfter(base, pct, anniv),
         phone: Value(_demoUnits[i][4] as String),
         startedOn: Value(adForBsMonthStart(startYear, startMonth)),
-        lastRaisedOn: Value(adForBsMonthStart(startYear + anniv, startMonth)),
+        lastRaisedOn: Value(raiseStampFor(startYear + anniv, startMonth)),
         depositAmount: Value(base * 2), // ~2 months, set at move-in
         isActive: Value(!vacant),
         depositRefunded: Value(vacant),
@@ -1391,11 +1642,13 @@ class LedgerRepository {
         if ((i * 7 + monthBack * 3) % 10 < 7) {
           final anniv = (cursor.month >= sm ? cursor.year : cursor.year - 1) -
               startYear;
+          final rentThen = _rentAfter(bases[i], pct, anniv < 0 ? 0 : anniv);
           payments.add(PaymentsCompanion.insert(
             unitId: ids[i],
             year: cursor.year,
             month: cursor.month,
-            amount: _rentAfter(bases[i], pct, anniv < 0 ? 0 : anniv),
+            amount: rentThen,
+            rentAtPayment: Value(rentThen),
             paidOn: Value(now),
           ));
         }
@@ -1408,19 +1661,7 @@ class LedgerRepository {
     });
 
     // One sequenced cloud replace for the whole freshly-built dataset.
-    if (sync != null) {
-      final allU = await allUnits();
-      final map = {
-        for (final u in allU)
-          if (u.cloudId != null) u.id: u.cloudId!,
-      };
-      sync!.replaceAllCloud(
-        units: allU,
-        payments: await allPayments(),
-        charges: await allCharges(),
-        cloudIdByUnitId: map,
-      );
-    }
+    await _queue(const [SyncKey.all()]);
   }
 
   /// [base] rent compounded by [pct]% for [anniversaries] years, rounded to
@@ -1438,7 +1679,9 @@ class LedgerRepository {
   /// signed-in device clears. [eraseAllLocal] is the drift-only form.
   Future<void> eraseAll() async {
     await eraseAllLocal();
-    sync?.eraseAllCloud();
+    // An empty ledger replacing the cloud copy erases it; queued through the
+    // outbox so it still happens if sync isn't attached right now.
+    await _queue(const [SyncKey.all()]);
   }
 
   /// Drift-only wipe (no cloud push). Used by the sync owner-guard when a
@@ -1446,10 +1689,316 @@ class LedgerRepository {
   Future<void> eraseAllLocal() async {
     await db.delete(db.payments).go();
     await db.delete(db.units).go();
+    // Nothing is left to push; in particular the previous owner's pending
+    // changes must never reach the next owner's cloud.
+    await db.delete(db.pendingPushes).go();
   }
 
   // ---- Cloud sync: drift-only apply path (called by FirestoreSyncService;
   //      these NEVER push, which is what makes echo loops impossible) ---------
+
+  /// Applies a batch of cloud state to the local ledger in **one transaction**,
+  /// writing only what actually differs.
+  ///
+  /// The lists are either a live listener's changes, or — with [fullSnapshot]
+  /// — the complete cloud state from a pull. For a full snapshot, a local row
+  /// the cloud doesn't have is deleted when [deleteMissing] (it was removed on
+  /// another device) or otherwise reported back in `toPush` (first sync: it
+  /// exists only here and should go up).
+  ///
+  /// Three guarantees, all of which the old row-at-a-time apply lacked:
+  ///   • **A pending key is never touched.** If this device changed a row and
+  ///     the cloud hasn't acknowledged it (see [PendingPushes]), the cloud's
+  ///     copy is stale by definition: it neither overwrites nor deletes the
+  ///     local row. While a whole-ledger replace is pending, nothing is
+  ///     applied at all.
+  ///   • **Equal rows cost nothing.** Rows already matching the cloud are
+  ///     skipped, so the common pull writes nothing and reports
+  ///     `changed: false` — no UI refresh.
+  ///   • **Two units with the same code both survive.** The unit with the
+  ///     larger cloudId gets a numeric suffix; every device makes the same
+  ///     choice, so they converge instead of each silently dropping the
+  ///     other's unit.
+  ///
+  /// Never pushes (that is what makes echo loops impossible); the caller
+  /// queues `toPush`.
+  Future<RemoteApplyResult> applyRemote({
+    List<RemoteUnit> units = const [],
+    List<RemotePayment> payments = const [],
+    List<RemoteCharge> charges = const [],
+    List<String> removedUnits = const [],
+    List<SyncKey> removedChildren = const [],
+    bool fullSnapshot = false,
+    bool deleteMissing = false,
+  }) {
+    return db.transaction(() async {
+      final pending = {
+        for (final p in await db.select(db.pendingPushes).get())
+          SyncKey.fromRow(p),
+      };
+      if (pending.any((k) => k.isAll)) return const RemoteApplyResult();
+
+      var changed = false;
+      final toPush = <SyncKey>[];
+      final writes = <void Function(Batch)>[];
+      Future<void> flush() async {
+        if (writes.isEmpty) return;
+        final ops = List.of(writes);
+        writes.clear();
+        await db.batch((b) {
+          for (final w in ops) {
+            w(b);
+          }
+        });
+      }
+
+      // ---- Units ---------------------------------------------------------
+      var local = await allUnits();
+      final byCloud = <String, Unit>{
+        for (final u in local)
+          if (u.cloudId != null) u.cloudId!: u,
+      };
+      // code → the cloudId that holds it (null for a unit with no cloudId).
+      final codeOwner = <String, String?>{
+        for (final u in local) u.code: u.cloudId,
+      };
+
+      void dropUnit(Unit u) {
+        writes.add((b) => b.deleteWhere(db.units, (t) => t.id.equals(u.id)));
+        byCloud.remove(u.cloudId);
+        codeOwner.remove(u.code);
+        changed = true;
+      }
+
+      // Removals first, so a code they held is free for an incoming unit.
+      for (final cid in removedUnits) {
+        if (pending.contains(SyncKey.unit(cid))) continue;
+        final u = byCloud[cid];
+        if (u != null) dropUnit(u);
+      }
+      if (fullSnapshot) {
+        final remoteIds = {for (final r in units) r.cloudId};
+        for (final u in local) {
+          final cid = u.cloudId;
+          if (cid == null || remoteIds.contains(cid)) continue;
+          if (pending.contains(SyncKey.unit(cid))) continue;
+          if (deleteMissing) {
+            dropUnit(u);
+          } else {
+            toPush.add(SyncKey.unit(cid));
+          }
+        }
+      }
+
+      for (var r in units) {
+        if (pending.contains(SyncKey.unit(r.cloudId))) continue;
+        if (codeOwner.containsKey(r.code) && codeOwner[r.code] != r.cloudId) {
+          // Another unit already holds this code. The larger cloudId yields.
+          final owner = codeOwner[r.code];
+          if (owner == null || r.cloudId.compareTo(owner) > 0) {
+            r = r.withCode(_freeCode(r.code, codeOwner, r.cloudId));
+            toPush.add(SyncKey.unit(r.cloudId));
+          } else {
+            final loser = byCloud[owner]!;
+            final newCode = _freeCode(loser.code, codeOwner, owner);
+            writes.add((b) => b.update(
+                db.units, UnitsCompanion(code: Value(newCode)),
+                where: (t) => t.id.equals(loser.id)));
+            codeOwner
+              ..remove(loser.code)
+              ..[newCode] = owner;
+            byCloud[owner] = loser.copyWith(code: newCode);
+            toPush.add(SyncKey.unit(owner));
+            changed = true;
+          }
+        }
+        final row = r;
+        final existing = byCloud[row.cloudId];
+        if (existing == null) {
+          writes.add((b) => b.insert(db.units, row.toCompanion()));
+          codeOwner[row.code] = row.cloudId;
+          changed = true;
+        } else if (!row.matches(existing)) {
+          if (existing.code != row.code) {
+            codeOwner
+              ..remove(existing.code)
+              ..[row.code] = row.cloudId;
+          }
+          writes.add((b) => b.update(
+              db.units, row.toCompanion(includeCreatedAt: false),
+              where: (t) => t.id.equals(existing.id)));
+          changed = true;
+        }
+      }
+      if (writes.isNotEmpty) {
+        await flush();
+        local = await allUnits(); // ids of the units just inserted
+      }
+
+      // ---- Payments and charges -----------------------------------------
+      final orphanPayments = <RemotePayment>[];
+      final orphanCharges = <RemoteCharge>[];
+      final hasChildren = fullSnapshot ||
+          payments.isNotEmpty ||
+          charges.isNotEmpty ||
+          removedChildren.isNotEmpty;
+      if (hasChildren) {
+        final idByCloud = <String, int>{
+          for (final u in local)
+            if (u.cloudId != null) u.cloudId!: u.id,
+        };
+        final cloudById = <int, String>{
+          for (final e in idByCloud.entries) e.value: e.key,
+        };
+
+        // The local rows this batch could touch: one query per table (the
+        // whole table for a full snapshot, else just the units involved).
+        final Set<int>? unitIds = fullSnapshot
+            ? null
+            : {
+                for (final r in payments) idByCloud[r.unitCloudId],
+                for (final r in charges) idByCloud[r.unitCloudId],
+                for (final k in removedChildren) idByCloud[k.cloudId],
+              }.whereType<int>().toSet();
+        final localPayments = unitIds == null
+            ? await allPayments()
+            : unitIds.isEmpty
+                ? const <Payment>[]
+                : await (db.select(db.payments)
+                      ..where((p) => p.unitId.isIn(unitIds)))
+                    .get();
+        final localCharges = unitIds == null
+            ? await allCharges()
+            : unitIds.isEmpty
+                ? const <Charge>[]
+                : await (db.select(db.charges)
+                      ..where((c) => c.unitId.isIn(unitIds)))
+                    .get();
+        final payBy = {
+          for (final p in localPayments) (p.unitId, p.year, p.month): p,
+        };
+        final chargeBy = {
+          for (final c in localCharges) (c.unitId, c.year, c.month): c,
+        };
+        final seenPay = <(int, int, int)>{};
+        final seenCharge = <(int, int, int)>{};
+
+        for (final r in payments) {
+          final unitId = idByCloud[r.unitCloudId];
+          if (unitId == null) {
+            orphanPayments.add(r);
+            continue;
+          }
+          final k = (unitId, r.year, r.month);
+          seenPay.add(k);
+          if (pending.contains(r.key)) continue;
+          final existing = payBy[k];
+          if (existing == null) {
+            writes.add((b) => b.insert(db.payments, r.toCompanion(unitId)));
+            changed = true;
+          } else if (!r.matches(existing)) {
+            writes.add((b) => b.update(db.payments, r.toCompanion(unitId),
+                where: (t) => t.id.equals(existing.id)));
+            changed = true;
+          }
+        }
+        for (final r in charges) {
+          final unitId = idByCloud[r.unitCloudId];
+          if (unitId == null) {
+            orphanCharges.add(r);
+            continue;
+          }
+          final k = (unitId, r.year, r.month);
+          seenCharge.add(k);
+          if (pending.contains(r.key)) continue;
+          final existing = chargeBy[k];
+          if (existing == null) {
+            writes.add((b) => b.insert(db.charges, r.toCompanion(unitId)));
+            changed = true;
+          } else if (!r.matches(existing)) {
+            writes.add((b) => b.update(db.charges, r.toCompanion(unitId),
+                where: (t) => t.id.equals(existing.id)));
+            changed = true;
+          }
+        }
+
+        for (final k in removedChildren) {
+          if (pending.contains(k)) continue;
+          final unitId = idByCloud[k.cloudId];
+          if (unitId == null) continue;
+          final key = (unitId, k.year, k.month);
+          if (k.kind == SyncKey.kPayment) {
+            final e = payBy[key];
+            if (e == null) continue;
+            writes.add(
+                (b) => b.deleteWhere(db.payments, (t) => t.id.equals(e.id)));
+          } else {
+            final e = chargeBy[key];
+            if (e == null) continue;
+            writes.add(
+                (b) => b.deleteWhere(db.charges, (t) => t.id.equals(e.id)));
+          }
+          changed = true;
+        }
+
+        if (fullSnapshot) {
+          for (final p in localPayments) {
+            if (seenPay.contains((p.unitId, p.year, p.month))) continue;
+            final cid = cloudById[p.unitId];
+            if (cid == null) continue;
+            final key = SyncKey.payment(cid, p.year, p.month);
+            if (pending.contains(key)) continue;
+            if (deleteMissing) {
+              writes.add((b) =>
+                  b.deleteWhere(db.payments, (t) => t.id.equals(p.id)));
+              changed = true;
+            } else {
+              toPush.add(key);
+            }
+          }
+          for (final c in localCharges) {
+            if (seenCharge.contains((c.unitId, c.year, c.month))) continue;
+            final cid = cloudById[c.unitId];
+            if (cid == null) continue;
+            final key = SyncKey.charge(cid, c.year, c.month);
+            if (pending.contains(key)) continue;
+            if (deleteMissing) {
+              writes.add(
+                  (b) => b.deleteWhere(db.charges, (t) => t.id.equals(c.id)));
+              changed = true;
+            } else {
+              toPush.add(key);
+            }
+          }
+        }
+        await flush();
+      }
+
+      return RemoteApplyResult(
+        changed: changed,
+        orphanPayments: orphanPayments,
+        orphanCharges: orphanCharges,
+        toPush: toPush,
+      );
+    });
+  }
+
+  /// The first free variant of [code] — `code-2`, `code-3`, … — kept within
+  /// the 32-character column limit. A code already held by [self] counts as
+  /// free (re-resolving the same collision must settle on the same answer).
+  static String _freeCode(
+      String code, Map<String, String?> owners, String self) {
+    for (var n = 2;; n++) {
+      final suffix = '-$n';
+      final base = code.length + suffix.length > 32
+          ? code.substring(0, 32 - suffix.length)
+          : code;
+      final candidate = '$base$suffix';
+      if (!owners.containsKey(candidate) || owners[candidate] == self) {
+        return candidate;
+      }
+    }
+  }
 
   /// Upsert a unit arriving from the cloud, matched by its stable [cloudId].
   /// A `code` collision with another local row (the unique index) is caught and
@@ -1515,7 +2064,8 @@ class RentSchedule {
     // With escalation off the anchor is never consulted, so don't convert it
     // (a stray out-of-range lastRaisedOn from a restore would throw here).
     if (percent <= 0) return RentSchedule._(unit, percent, startBs, 0);
-    final anchorBs = bsYearMonth(unit.lastRaisedOn ?? started);
+    final last = unit.lastRaisedOn;
+    final anchorBs = last != null ? bsMonthOfRaiseStamp(last) : startBs;
     final coveredThroughYear =
         anchorBs.month >= startBs.month ? anchorBs.year : anchorBs.year - 1;
     return RentSchedule._(

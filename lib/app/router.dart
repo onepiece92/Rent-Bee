@@ -27,7 +27,10 @@ GoRouter buildRouter(AuthProvider auth) {
       final atGate = loc == '/login' || loc == onboardPhone || loc == onboardPin;
       if (auth.unlocked) return atGate ? '/' : null;
       // Not unlocked — route to the earliest incomplete onboarding step.
-      if (!auth.phoneVerified) return loc == onboardPhone ? null : onboardPhone;
+      // A forgotten PIN is reset by verifying the recorded number again.
+      if (!auth.phoneVerified || auth.resettingPin) {
+        return loc == onboardPhone ? null : onboardPhone;
+      }
       if (!auth.hasPin) return loc == onboardPin ? null : onboardPin;
       return loc == '/login' ? null : '/login';
     },

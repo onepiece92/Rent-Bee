@@ -241,6 +241,50 @@ void main() {
     expect(bCloud, {'B-02'});
   });
 
+  test('an anniversary raise made before sync attaches is pushed, not reverted',
+      () async {
+    // buglog B02: the startup raise runs before sync is attached. It used to
+    // be local only, and the pull then restored the cloud's pre-raise rent —
+    // every launch. Now the raise sits in the outbox, goes up first, and the
+    // pull leaves the pending unit alone.
+    final fake = FakeFirebaseFirestore();
+    const uid = 'raise-1';
+    final d = await _device(fake, uid);
+    await d.repo.createUnit(UnitsCompanion.insert(
+      code: 'A-01',
+      tenantName: 'Asha',
+      monthlyRent: 10000,
+      startedOn: Value(DateTime(2022, 6, 15)),
+      // Raised through last year's anniversary already.
+      lastRaisedOn: Value(DateTime(2024, 7, 1)),
+    ));
+    await d.sync.reconcile();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final asOf = DateTime(2025, 9, 1); // past the 2025 anniversary
+
+    // Cold start: no sync yet → the raise is local, and queued.
+    d.repo.sync = null;
+    expect(await d.repo.applyAnniversaryRaises(percent: 5, asOf: asOf), 1);
+    expect((await d.repo.allUnits()).single.monthlyRent, 10500);
+    expect((await _units(fake, uid).get()).docs.single.data()['monthlyRent'],
+        10000);
+    expect(await d.repo.pendingPushes(), isNotEmpty);
+
+    // Sync attaches: the raise is pushed and survives the pull.
+    d.repo.sync = d.sync;
+    await d.sync.reconcile();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect((await d.repo.allUnits()).single.monthlyRent, 10500);
+    expect((await _units(fake, uid).get()).docs.single.data()['monthlyRent'],
+        10500);
+    expect(await d.repo.pendingPushes(), isEmpty);
+
+    // The next launch keeps it, and nothing raises twice.
+    await d.sync.reconcile();
+    expect((await d.repo.allUnits()).single.monthlyRent, 10500);
+    expect(await d.repo.applyAnniversaryRaises(percent: 5, asOf: asOf), 0);
+  });
+
   test('reconcile pushes a local-only unit up on first sync', () async {
     final fake = FakeFirebaseFirestore();
     const uid = 'u3';

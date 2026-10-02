@@ -17,6 +17,10 @@ import '../widgets/glass.dart';
 /// SMS code. On success the verified number + Firebase uid are recorded
 /// ([AuthProvider.recordPhoneVerification]) and go_router advances to the
 /// set-PIN screen. The field defaults to a `+977` (Nepal) prefix.
+///
+/// The same screen resets a forgotten PIN ([AuthProvider.resettingPin]): the
+/// number is then fixed to the one this device was set up with, and a
+/// successful verification clears the PIN instead of recording a new identity.
 class PhoneLoginScreen extends StatefulWidget {
   const PhoneLoginScreen({super.key});
 
@@ -38,6 +42,13 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
   bool _busy = false;
 
   @override
+  void initState() {
+    super.initState();
+    final auth = context.read<AuthProvider>();
+    if (auth.resettingPin) _phone.text = auth.phone ?? '';
+  }
+
+  @override
   void dispose() {
     _phone.dispose();
     _otp.dispose();
@@ -45,7 +56,9 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
   }
 
   Future<void> _sendCode(AuthProvider auth) async {
-    final e164 = normalizePhone(_phone.text);
+    // A PIN reset verifies the recorded number, whatever the field holds.
+    final e164 =
+        auth.resettingPin ? auth.phone ?? '' : normalizePhone(_phone.text);
     final err = phoneError(e164);
     if (err != null || !e164.startsWith('+')) {
       setState(() => _error = err ?? 'Include the country code, e.g. +977…');
@@ -144,6 +157,16 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
   }
 
   Future<void> _recordAndAdvance(AuthProvider auth, User user) async {
+    if (auth.resettingPin) {
+      final ok = await auth.completePinReset(_phoneE164 ?? '', user.uid);
+      if (!ok && mounted) {
+        setState(() {
+          _error = 'That is not the number this device was set up with.';
+          _busy = false;
+        });
+      }
+      return; // on success go_router advances to the set-PIN screen
+    }
     await auth.recordPhoneVerification(_phoneE164 ?? user.phoneNumber ?? '', user.uid);
     // go_router redirect advances to the set-PIN screen on auth change.
   }
@@ -161,6 +184,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
     final sys = Sys.of(context);
     final auth = context.watch<AuthProvider>();
     final isOtp = _step == _Step.otp;
+    final resetting = auth.resettingPin;
 
     return Scaffold(
       body: PageBackground(
@@ -187,7 +211,11 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
                       Text(
                         isOtp
                             ? 'Enter the code sent to ${_phoneE164 ?? ''}'
-                            : 'Verify your phone number to get started',
+                            : resetting
+                                ? 'Forgot your PIN? Verify your number by SMS '
+                                    'to set a new one. Your ledger stays as '
+                                    'it is.'
+                                : 'Verify your phone number to get started',
                         textAlign: TextAlign.center,
                         style: Type.subhead.colored(sys.secondaryLabel),
                       ),
@@ -198,7 +226,8 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
                           label: 'Phone number',
                           hint: '+9779801234501',
                           keyboardType: TextInputType.phone,
-                          autofocus: true,
+                          autofocus: !resetting,
+                          readOnly: resetting, // only the recorded number
                           formatters: [
                             FilteringTextInputFormatter.allow(RegExp(r'[0-9+]')),
                           ],
@@ -232,8 +261,17 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
                             ? null
                             : () => isOtp ? _confirmCode(auth) : _sendCode(auth),
                       ),
-                      if (isOtp && !_busy) ...[
+                      if (resetting && !_busy) ...[
                         const SizedBox(height: 8),
+                        Center(
+                          child: AppButton(
+                            kind: ButtonKind.plain,
+                            label: 'Back to PIN',
+                            onTap: auth.cancelPinReset,
+                          ),
+                        ),
+                      ],
+                      if (isOtp && !_busy && !resetting) ...[
                         Center(
                           child: AppButton(
                             kind: ButtonKind.plain,
@@ -245,7 +283,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
                       // Debug-only shortcut to skip OTP + PIN while testing
                       // (e.g. on macOS where phone auth uses reCAPTCHA). Never
                       // compiled into release builds.
-                      if (kDebugMode && !isOtp && !_busy) ...[
+                      if (kDebugMode && !isOtp && !_busy && !resetting) ...[
                         const SizedBox(height: 8),
                         Center(
                           child: AppButton(
@@ -317,7 +355,10 @@ class _Field extends StatelessWidget {
     this.maxLength,
     this.onSubmitted,
     this.spaced = false,
+    this.readOnly = false,
   });
+
+  final bool readOnly;
 
   /// Wide tracking for one-time codes, so each digit is checkable at a glance.
   final bool spaced;
@@ -327,6 +368,7 @@ class _Field extends StatelessWidget {
     return TextField(
       controller: controller,
       autofocus: autofocus,
+      readOnly: readOnly,
       keyboardType: keyboardType,
       inputFormatters: formatters,
       maxLength: maxLength,

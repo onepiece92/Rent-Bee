@@ -168,6 +168,34 @@ void main() {
       expect(after.activeCount, 2);
     });
 
+    test('periodSummarySpan crosses the BS year boundary (AD Jan–Dec year)',
+        () async {
+      final a = await makeUnit('A-01', 1000);
+      // Pay a month on each side of the boundary.
+      await repo.markPaid(a, 2082, 11);
+      await repo.markPaid(a, 2083, 1);
+      // Charges in the second BS year still price their month.
+      await repo.setCharges(a.id, 2083, 2, electricity: 500);
+
+      final p = await repo.periodSummarySpan(
+          const BsMonth(2082, 10), const BsMonth(2083, 9));
+
+      expect(p.months.length, 12);
+      expect((p.months.first.year, p.months.first.month), (2082, 10));
+      expect((p.months.last.year, p.months.last.month), (2083, 9));
+      expect(p.expected, 12 * 1000 + 500);
+      expect(p.collected, 2000);
+      expect(p.paidSlots, 2);
+      expect(p.totalSlots, 12);
+      // The charge lands in its own bucket, not a same-numbered month of the
+      // other year.
+      final m2083x2 =
+          p.months.firstWhere((b) => b.year == 2083 && b.month == 2);
+      expect(m2083x2.expected, 1500);
+      final m2082x2 = p.months.where((b) => b.year == 2082 && b.month == 2);
+      expect(m2082x2, isEmpty); // outside the span entirely
+    });
+
     test('all settled: no outstanding, full progress', () async {
       final a = await makeUnit('A-01', 5000);
       for (var m = 1; m <= 3; m++) {

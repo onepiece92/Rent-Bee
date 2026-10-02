@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../domain/test_accounts.dart';
+
 /// Result of attempting to reserve one OTP send against the global daily cap.
 class OtpQuota {
   /// Whether this send is permitted.
@@ -43,12 +45,10 @@ class OtpQuotaService {
   /// Rolling window that begins with the first send after a reset.
   static const Duration window = Duration(hours: 24);
 
-  /// Numbers exempt from the cap — the store-review test numbers registered in
-  /// Firebase Auth ("Phone numbers for testing"). Keep this in sync with the
-  /// console so reviewers are never blocked and never consume a real slot.
-  static const Set<String> exemptNumbers = {
-    '+9779800000000', // Play/App Store review test number (fixed OTP in console)
-  };
+  /// Numbers exempt from the cap — the store-review test numbers (see
+  /// [reviewTestNumbers]), so reviewers are never blocked and never consume a
+  /// real slot.
+  static const Set<String> exemptNumbers = reviewTestNumbers;
 
   DocumentReference<Map<String, dynamic>> get _doc =>
       _fs.collection('meta').doc('otpQuota');

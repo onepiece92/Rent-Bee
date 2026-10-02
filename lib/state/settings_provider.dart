@@ -39,6 +39,13 @@ class SettingsProvider extends ChangeNotifier {
   /// inbound path (it does NOT call this, avoiding echo loops).
   void Function()? cloudPush;
 
+  /// Counts changes the owner made on this device to a synced setting
+  /// (calendar, currency, rate). Sync start compares it before and after its
+  /// slow reconcile: if it moved, the local choice is newer than the cloud's
+  /// and must win instead of being overwritten.
+  int get localRevision => _localRevision;
+  int _localRevision = 0;
+
   /// [isExistingInstall] resolves the calendar default when nothing is
   /// stored yet: `true` (a device that has used the app before — see
   /// `AuthProvider.hasExistingInstall`) keeps today's BS default unchanged;
@@ -61,7 +68,15 @@ class SettingsProvider extends ChangeNotifier {
         _appearance = ThemeMode.values.firstWhere(
           (m) => m.name == _prefs.getString(_kAppearance),
           orElse: () => ThemeMode.system,
-        );
+        ) {
+    // Pin the calendar default the first time it is resolved. It is derived
+    // from "has this device completed setup before?", which flips to true the
+    // moment the first PIN is set — so an unsaved AD default on a fresh
+    // install silently became BS on the second launch (buglog B11).
+    if (!_prefs.containsKey(_kCalendar)) {
+      _prefs.setString(_kCalendar, _calendar.name);
+    }
+  }
 
   CalendarMode get calendar => _calendar;
 
@@ -85,6 +100,7 @@ class SettingsProvider extends ChangeNotifier {
   Future<void> setCalendar(CalendarMode mode) async {
     if (mode == _calendar) return;
     _calendar = mode;
+    _localRevision++;
     await _prefs.setString(_kCalendar, mode.name);
     notifyListeners();
     cloudPush?.call(); // mirror the change to other devices on this login
@@ -93,6 +109,7 @@ class SettingsProvider extends ChangeNotifier {
   Future<void> setCurrency(Currency currency) async {
     if (currency == _currency) return;
     _currency = currency;
+    _localRevision++;
     await _prefs.setString(_kCurrency, currency.name);
     notifyListeners();
     cloudPush?.call(); // mirror the change to other devices on this login
@@ -137,6 +154,7 @@ class SettingsProvider extends ChangeNotifier {
     final p = percent.clamp(0, _maxRaisePercent).toDouble();
     if (p == _annualRaisePercent) return;
     _annualRaisePercent = p;
+    _localRevision++;
     await _prefs.setDouble(_kRaisePercent, p);
     notifyListeners();
     cloudPush?.call(); // mirror the change to other devices on this login

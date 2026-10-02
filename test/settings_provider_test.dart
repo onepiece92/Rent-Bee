@@ -116,5 +116,19 @@ void main() {
       final freshOnBs = await make({'calendar_mode': 'bs'}, false);
       expect(freshOnBs.calendar, CalendarMode.bs);
     });
+
+    test('the fresh-install AD default survives the second launch', () async {
+      // buglog B11: the default is derived from "has this device set a PIN
+      // before?", which is true from launch 2 on. Unless the first launch
+      // saves what it resolved, AD silently turns into BS.
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final first = SettingsProvider(prefs, isExistingInstall: false);
+      expect(first.calendar, CalendarMode.ad);
+
+      // Launch 2: the PIN now exists, so the install looks "existing".
+      final second = SettingsProvider(prefs, isExistingInstall: true);
+      expect(second.calendar, CalendarMode.ad);
+    });
   });
 }

@@ -60,4 +60,22 @@ void main() {
       expect(t, isNot(contains('Rs')));
     });
   });
+
+  group('calendar the owner reads dates in (buglog B15)', () {
+    test('an AD-mode reminder names the Gregorian month, not the BS one', () {
+      final t = rentReminderText(unit, month,
+          paid: false,
+          amount: 15000,
+          currency: Currency.npr,
+          mode: CalendarMode.ad);
+      expect(t, contains(month.labelIn(CalendarMode.ad)));
+      expect(t, isNot(contains('Ashwin')));
+    });
+
+    test('BS mode keeps the BS month', () {
+      final t = rentReminderText(unit, month,
+          paid: false, amount: 15000, currency: Currency.npr);
+      expect(t, contains('Ashwin 2083'));
+    });
+  });
 }

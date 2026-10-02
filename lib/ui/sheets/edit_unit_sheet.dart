@@ -11,6 +11,7 @@ import '../../domain/phone.dart';
 import '../../domain/unit_code.dart';
 import '../../state/ledger_provider.dart';
 import '../../state/settings_provider.dart';
+import '../util/phone_input_formatter.dart';
 import '../widgets/glass.dart';
 import '../widgets/sheet_scaffold.dart';
 import '../widgets/tap_target.dart';
@@ -114,8 +115,18 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
     }
   }
 
+  /// True while a save is in flight: a second tap must not submit again (it
+  /// would add the unit twice — or fail on the duplicate code and report an
+  /// error for a save that worked).
+  bool _saving = false;
+
   Future<void> _save() async {
+    if (_saving) return;
     if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    // Captured before the awaits: if the sheet is dismissed while the save is
+    // in flight, the pop below must not close whatever route lies beneath.
+    final route = ModalRoute.of(context);
     final ledger = context.read<LedgerProvider>();
     final raisePct = context.read<SettingsProvider>().annualRaisePercent;
     final rent = int.tryParse(_rent.text.trim()) ?? 0;
@@ -152,13 +163,15 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
         // applying any due anniversary increases now (not just on next launch).
         if (raisePct > 0) await ledger.applyDueRaises(raisePct);
       }
-      if (mounted) Navigator.of(context).pop();
+      if (mounted && (route?.isCurrent ?? true)) Navigator.of(context).pop();
     } catch (_) {
       if (mounted) {
         showToast(context,
             'Could not save — code "${_code.text.trim()}" may already exist.',
             error: true);
       }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -222,12 +235,14 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
                   hint: '98…',
                   keyboardType: TextInputType.phone,
                   // Clean spaces/dashes on type or paste, then sanity-check.
-                  inputFormatters: [_PhoneInputFormatter()],
+                  inputFormatters: const [PhoneInputFormatter()],
                   validator: phoneError,
                   // Tap to pull a number straight from the OS contact picker.
                   suffixIcon: IconButton(
                     tooltip: 'Pick from contacts',
-                    visualDensity: VisualDensity.compact,
+                    constraints: const BoxConstraints(
+                        minWidth: Sys.minTapTarget,
+                        minHeight: Sys.minTapTarget),
                     icon: Icon(Icons.contact_phone_outlined,
                         size: 18, color: sys.tintText),
                     onPressed: _pickFromContacts,
@@ -263,6 +278,7 @@ class _EditUnitSheetState extends State<EditUnitSheet> {
           AppButton(
             label: _isEdit ? 'Save changes' : 'Add Unit',
             onTap: _save,
+            busy: _saving,
             kind: ButtonKind.prominent,
             expand: true,
           ),
@@ -322,21 +338,6 @@ class _DateField extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-/// Live-cleans a phone field: on every keystroke or paste it strips spaces,
-/// dashes and parens down to digits (plus an optional leading `+`), so the
-/// stored number is always tidy and SMS reminders work.
-class _PhoneInputFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(
-      TextEditingValue oldValue, TextEditingValue newValue) {
-    final cleaned = normalizePhone(newValue.text);
-    return TextEditingValue(
-      text: cleaned,
-      selection: TextSelection.collapsed(offset: cleaned.length),
     );
   }
 }

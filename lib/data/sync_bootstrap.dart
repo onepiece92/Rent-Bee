@@ -23,9 +23,9 @@ Future<FirestoreSyncService?> startSync({
   SyncStatusController? status,
   void Function(String? calendarMode, num? rate, String? currency)?
       onRemoteSettings,
-  String? localCalendarMode,
-  double? localRate,
-  String? localCurrency,
+  ({String calendarMode, double rate, String currency}) Function()?
+      localSettings,
+  int Function()? settingsRevision,
 }) async {
   if (auth.isGuest || !auth.phoneVerified) {
     status?.setOff();
@@ -52,29 +52,56 @@ Future<FirestoreSyncService?> startSync({
   final service =
       FirestoreSyncService(uid: uid, repo: repo, prefs: prefs, status: status);
   service.onRemoteSettings = onRemoteSettings;
+  // Settings revision at the moment sync starts — to tell, further down,
+  // whether the owner changed a setting while we were reconciling.
+  final revisionAtStart = settingsRevision?.call();
   repo.sync = service;
   await service.reconcile();
-  service.attachListeners(onApply);
 
-  // Owner settings (calendar mode + currency + escalation rate): cloud wins
-  // if it has any value, otherwise seed it from this device so the first
-  // login establishes the preferences.
-  final remote = await service.fetchSettings();
-  final hasRemote = remote != null &&
-      (remote['calendarMode'] != null ||
-          remote['annualRaisePercent'] != null ||
-          remote['currency'] != null);
-  if (hasRemote) {
-    onRemoteSettings?.call(
-      remote['calendarMode'] as String?,
-      remote['annualRaisePercent'] as num?,
-      remote['currency'] as String?,
-    );
-  } else if (localCalendarMode != null &&
-      localRate != null &&
-      localCurrency != null) {
-    service.pushSettings(localCalendarMode, localRate, localCurrency);
+  // The owner signed out (or sync was torn down) while reconciling: this
+  // service is dead. Attaching listeners to it would leave them running
+  // against a signed-out session with nothing left to cancel them.
+  bool alive() => repo.sync == service && auth.phoneVerified;
+  if (!alive()) {
+    await service.detach();
+    return null;
   }
+
+  // Owner settings (calendar mode + currency + escalation rate), settled
+  // BEFORE the listeners attach. The cloud wins if it has any value —
+  // unless the owner changed a setting on this device while sync was
+  // starting, in which case that newer choice wins and is pushed. (Doing this
+  // after attaching let the settings listener's first snapshot overwrite the
+  // local change before it could be pushed.)
+  try {
+    final remote = await service.fetchSettings();
+    if (!alive()) {
+      await service.detach();
+      return null;
+    }
+    final hasRemote = remote != null &&
+        (remote['calendarMode'] != null ||
+            remote['annualRaisePercent'] != null ||
+            remote['currency'] != null);
+    final changedLocally =
+        revisionAtStart != null && settingsRevision!() != revisionAtStart;
+    if (hasRemote && !changedLocally) {
+      onRemoteSettings?.call(
+        remote['calendarMode'] as String?,
+        remote['annualRaisePercent'] as num?,
+        remote['currency'] as String?,
+      );
+    } else if (localSettings != null) {
+      final s = localSettings();
+      service.pushSettings(s.calendarMode, s.rate, s.currency);
+    }
+  } catch (e) {
+    // Settings are a convenience; failing to read them must not leave the
+    // ledger without its listeners.
+    debugPrint('Sync: could not read owner settings: $e');
+  }
+
+  service.attachListeners(onApply);
   return service;
 }
 

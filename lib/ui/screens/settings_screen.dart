@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../app/theme.dart';
+import '../../app/version.dart';
+import '../../data/ledger_repository.dart';
 import '../../domain/bs_calendar.dart';
 import '../../domain/money.dart';
 import '../../state/auth_provider.dart';
@@ -31,7 +33,12 @@ class SettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sys = Sys.of(context);
-    final ledger = context.watch<LedgerProvider>();
+    // Only the three ledger facts this screen shows — not every Ledger
+    // notification (search keystrokes, filter, each mark-paid) while the tab
+    // sits off-screen.
+    final (unitCount, ledgerMonth, cloudSyncActive) = context.select<
+        LedgerProvider,
+        (int, BsMonth, bool)>((l) => (l.totalCount, l.month, l.cloudSyncActive));
     final settings = context.watch<SettingsProvider>();
     final auth = context.watch<AuthProvider>();
     final rate = settings.annualRaisePercent;
@@ -157,7 +164,7 @@ class SettingsScreen extends StatelessWidget {
                   child: SyncStatusLine(),
                 ),
                 const Hairline(inset: _rowInset),
-                if (ledger.cloudSyncActive) ...[
+                if (cloudSyncActive) ...[
                   ListRow(
                     leading: IconTile(
                         icon: Icons.cloud_upload_outlined, color: sys.tint),
@@ -209,25 +216,33 @@ class SettingsScreen extends StatelessWidget {
                   onTap: () => _exportCsv(context),
                 ),
                 const Hairline(inset: _rowInset),
-                ListRow(
-                  leading: IconTile(
-                      icon: Icons.auto_awesome, color: sys.secondaryLabel),
-                  title: 'Generate demo data',
-                  subtitle: 'Replace with 3 years of sample history',
-                  chevron: true,
-                  onTap: () => _generateDemo(context),
-                ),
-                const Hairline(inset: _rowInset),
+                // Demo data is a review/testing tool: only the store-review
+                // test login and the debug guest session see it. A real
+                // owner's account never does (it would replace their ledger).
+                if (auth.canGenerateDemoData) ...[
+                  ListRow(
+                    leading: IconTile(
+                        icon: Icons.auto_awesome, color: sys.secondaryLabel),
+                    title: 'Generate demo data',
+                    subtitle: 'Replace with 3 years of sample history',
+                    chevron: true,
+                    onTap: () => _generateDemo(context),
+                  ),
+                  const Hairline(inset: _rowInset),
+                ],
                 ListRow(
                   leading: IconTile(
                       icon: Icons.delete_sweep_outlined, color: sys.red),
                   title: 'Erase all data',
-                  subtitle: auth.phone == null
-                      ? 'Delete every unit and payment'
-                      : 'Delete every unit and payment, on all your devices',
+                  // "All your devices" only when the cloud mirror is live —
+                  // a guest or local-only session erases this device alone.
+                  subtitle: cloudSyncActive
+                      ? 'Delete every unit and payment, on all your devices'
+                      : 'Delete every unit and payment',
                   destructive: true,
                   chevron: true,
-                  onTap: () => _eraseAll(context, synced: auth.phone != null),
+                  onTap: () =>
+                      _eraseAll(context, synced: cloudSyncActive),
                 ),
               ],
             ),
@@ -253,22 +268,26 @@ class SettingsScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 12),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Rent Bee',
-                            style: Type.callout.semibold.colored(sys.label)),
-                        Text('v1.0.0 · offline',
-                            style: Type.caption1.colored(sys.secondaryLabel)),
-                      ],
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Rent Bee',
+                              style: Type.callout.semibold.colored(sys.label)),
+                          Text('Version $appVersion',
+                              style:
+                                  Type.caption1.colored(sys.secondaryLabel)),
+                        ],
+                      ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'Tracking ${ledger.totalCount} units in '
-                  '${ledger.month.labelIn(settings.calendar)}. '
-                  'Data is stored on this device.',
+                  'Tracking $unitCount units in '
+                  '${ledgerMonth.labelIn(settings.calendar)}. '
+                  // Not "offline": with sync on, the ledger is also in the cloud.
+                  '${cloudSyncActive ? 'Data is stored on this device and synced to your account.' : 'Data is stored on this device.'}',
                   style: Type.caption1.colored(sys.secondaryLabel).tabular,
                 ),
               ],
@@ -280,61 +299,8 @@ class SettingsScreen extends StatelessWidget {
   }
 
   Future<void> _changePin(BuildContext context) async {
-    final auth = context.read<AuthProvider>();
-    final current = TextEditingController();
-    final next = TextEditingController();
-    final confirm = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-
     final saved = await showGlassDialog<bool>(
-      context,
-      (ctx) => GlassDialog(
-        title: 'Change PIN',
-        content: Form(
-          key: formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _PinInput(controller: current, label: 'Current PIN'),
-              const SizedBox(height: 10),
-              _PinInput(
-                controller: next,
-                label: 'New PIN',
-                validator: (v) =>
-                    (v == null || v.trim().length != 4) ? 'Enter 4 digits' : null,
-              ),
-              const SizedBox(height: 10),
-              _PinInput(
-                controller: confirm,
-                label: 'Confirm new PIN',
-                validator: (v) =>
-                    v?.trim() != next.text.trim() ? 'Does not match' : null,
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          GlassDialogAction('Cancel',
-              onPressed: () => Navigator.pop(ctx, false)),
-          GlassDialogAction(
-            'Save',
-            primary: true,
-            onPressed: () async {
-              if (!formKey.currentState!.validate()) return;
-              if (!await auth.unlock(current.text.trim())) {
-                if (ctx.mounted) {
-                  showToast(ctx, 'Current PIN is incorrect', error: true);
-                }
-                return;
-              }
-              await auth.setPin(next.text.trim());
-              if (ctx.mounted) Navigator.pop(ctx, true);
-            },
-          ),
-        ],
-      ),
-    );
-
+        context, (_) => const _ChangePinDialog());
     if (saved == true && context.mounted) {
       showToast(context, 'PIN updated');
     }
@@ -380,7 +346,7 @@ class SettingsScreen extends StatelessWidget {
     }
 
     try {
-      final content = utf8.decode(bytes, allowMalformed: true);
+      final content = LedgerRepository.decodeCsv(bytes);
       final res = await ledger.importCsv(content);
       final nothing =
           res.unitsAdded == 0 && res.unitsUpdated == 0 && res.payments == 0;
@@ -392,8 +358,10 @@ class SettingsScreen extends StatelessWidget {
                 '${res.payments} payments (year $year)',
         error: nothing,
       );
+    } on FormatException catch (e) {
+      showToastOn(overlay, 'Nothing imported. ${e.message}', error: true);
     } catch (e) {
-      showToastOn(overlay, 'Import failed: $e', error: true);
+      showToastOn(overlay, 'Nothing imported: $e', error: true);
     }
   }
 
@@ -428,21 +396,18 @@ class SettingsScreen extends StatelessWidget {
 
   /// Picks a JSON backup file and REPLACES all current data with it (after a
   /// destructive confirm). The inverse of [_backup].
+  /// Restore replaces the whole ledger (and the cloud copy on every signed-in
+  /// device), so it is confirmed like Erase — by typing a word — and only
+  /// *after* the file has been read, when the dialog can say what the backup
+  /// holds. The old flow asked first, sight unseen, and a backup with no
+  /// units in it wiped everything on one tap (buglog B13).
   Future<void> _restoreBackup(BuildContext context) async {
     final ledger = context.read<LedgerProvider>();
+    // Captured before any await: the file picker can keep the app in the
+    // background long enough to auto-lock, which unmounts this screen — and
+    // the backup's currency must still be applied afterwards.
+    final settings = context.read<SettingsProvider>();
     final overlay = Overlay.of(context, rootOverlay: true);
-
-    final ok = await _confirm(
-      context,
-      title: 'Restore from backup?',
-      message:
-          'This replaces ALL current units, payments, and charges with the '
-          'contents of the backup file. Your current data will be overwritten '
-          'and can\'t be recovered. Continue?',
-      confirmLabel: 'Choose backup',
-      destructive: true,
-    );
-    if (ok != true) return;
 
     final FilePickerResult? picked;
     try {
@@ -463,8 +428,50 @@ class SettingsScreen extends StatelessWidget {
       return;
     }
 
+    final String content;
+    final ({int units, int payments, int charges, DateTime? exportedAt}) info;
     try {
-      final content = utf8.decode(bytes, allowMalformed: true);
+      content = utf8.decode(bytes); // strict: a mangled file is refused
+      info = LedgerRepository.inspectBackup(content);
+    } on FormatException catch (e) {
+      showToastOn(overlay, 'Not a usable backup: ${e.message}', error: true);
+      return;
+    } catch (e) {
+      showToastOn(overlay, 'Could not read the backup: $e', error: true);
+      return;
+    }
+    if (info.units == 0) {
+      // Restoring it would simply erase the ledger; that is what Erase is for.
+      showToastOn(overlay, 'That backup has no units in it — nothing restored',
+          error: true);
+      return;
+    }
+    if (!context.mounted) return; // locked while the picker was open
+
+    final mode = settings.calendar;
+    final when = info.exportedAt == null
+        ? ''
+        : ', saved ${dateLabel(info.exportedAt!, mode)}';
+    final where = ledger.cloudSyncActive
+        ? ' on this device and every other device signed in to your account'
+        : '';
+    final ok = await showGlassDialog<bool>(
+      context,
+      (_) => TypedConfirmDialog(
+        title: 'Restore from backup?',
+        message: 'The backup holds ${info.units} unit'
+            '${info.units == 1 ? '' : 's'}, ${info.payments} payment'
+            '${info.payments == 1 ? '' : 's'} and ${info.charges} charge '
+            'record${info.charges == 1 ? '' : 's'}$when. Restoring replaces '
+            'ALL current units, payments and charges$where. What you have now '
+            'will be overwritten and can\'t be recovered.',
+        word: 'RESTORE',
+        confirmLabel: 'Restore',
+      ),
+    );
+    if (ok != true) return;
+
+    try {
       final res = await ledger.restoreBackup(content);
       // Re-apply the backup's currency, if it carried one, so a restore from
       // a USD backup doesn't silently read back as NPR.
@@ -472,8 +479,8 @@ class SettingsScreen extends StatelessWidget {
       for (final c in Currency.values) {
         if (c.name == res.currency) restoredCurrency = c;
       }
-      if (restoredCurrency != null && context.mounted) {
-        await context.read<SettingsProvider>().setCurrency(restoredCurrency);
+      if (restoredCurrency != null) {
+        await settings.setCurrency(restoredCurrency);
       }
       showToastOn(
           overlay,
@@ -500,18 +507,53 @@ class SettingsScreen extends StatelessWidget {
     }
   }
 
+  /// Demo data REPLACES the whole ledger — and, with cloud sync on, the cloud
+  /// copy on every signed-in device. When there is (or may be) real data to
+  /// lose, a tap isn't enough: the dialog says what will be deleted and the
+  /// owner has to type REPLACE before the button enables. The plain confirm
+  /// stays only when nothing can be overwritten: an empty ledger *and* no
+  /// cloud mirror — with sync on, an empty local ledger proves nothing (the
+  /// cloud copy may simply not have been pulled yet).
   Future<void> _generateDemo(BuildContext context) async {
+    // Second line of defence behind the hidden row.
+    if (!context.read<AuthProvider>().canGenerateDemoData) return;
     final ledger = context.read<LedgerProvider>();
     // Grow demo rents at the configured rate (fall back handled in the repo).
     final pct = context.read<SettingsProvider>().annualRaisePercent;
     final overlay = Overlay.of(context, rootOverlay: true);
-    final ok = await _confirm(
-      context,
-      title: 'Generate demo data?',
-      message: 'This replaces all current units and payments with 3 years of '
-          'sample history (rents grow each anniversary).',
-      confirmLabel: 'Generate',
-    );
+    final units = ledger.totalCount;
+    final synced = ledger.cloudSyncActive;
+    final bool? ok;
+    if (units == 0 && !synced) {
+      ok = await _confirm(
+        context,
+        title: 'Generate demo data?',
+        message: 'This fills the ledger with 3 years of sample history (rents '
+            'grow each anniversary).',
+        confirmLabel: 'Generate',
+      );
+    } else {
+      final where = synced
+          ? ' from this device and every other device signed in to your '
+              'account'
+          : '';
+      final what = units > 0
+          ? 'You have $units unit${units == 1 ? '' : 's'} with payment '
+              'history. Generating demo data permanently deletes all of it'
+          : 'Generating demo data permanently deletes everything in this '
+              'account';
+      ok = await showGlassDialog<bool>(
+        context,
+        (_) => TypedConfirmDialog(
+          title: 'Replace your data with demo data?',
+          message: '$what$where and puts 3 years of sample history in its '
+              'place. This cannot be undone — back up to a file first if you '
+              'might want it back.',
+          word: 'REPLACE',
+          confirmLabel: 'Replace',
+        ),
+      );
+    }
     if (ok != true) return;
     await ledger.generateDemoData(pct);
     showToastOn(overlay, '3 years of demo data generated');
@@ -745,6 +787,96 @@ class _RaisePercentDialogState extends State<_RaisePercentDialog> {
           primary: true,
           onPressed: pct == null ? null : () => Navigator.pop(context, pct),
         ),
+      ],
+    );
+  }
+}
+
+/// Change PIN: current, new, confirm. A widget of its own so the three text
+/// controllers live exactly as long as the dialog (they used to be created
+/// in a method and never disposed).
+class _ChangePinDialog extends StatefulWidget {
+  const _ChangePinDialog();
+
+  @override
+  State<_ChangePinDialog> createState() => _ChangePinDialogState();
+}
+
+class _ChangePinDialogState extends State<_ChangePinDialog> {
+  final _current = TextEditingController();
+  final _next = TextEditingController();
+  final _confirm = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+
+  // Deriving the PIN hash takes a moment; a second tap on Save in that time
+  // must not run the whole change again.
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _current.dispose();
+    _next.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_busy) return;
+    if (!_formKey.currentState!.validate()) return;
+    final auth = context.read<AuthProvider>();
+    _busy = true;
+    try {
+      if (!await auth.unlock(_current.text.trim())) {
+        if (mounted) {
+          final wait = auth.lockoutRemaining;
+          showToast(
+              context,
+              wait > Duration.zero
+                  ? 'Too many wrong PINs. Try again in '
+                      '${wait.inMinutes > 0 ? '${wait.inMinutes + 1} min' : '${wait.inSeconds + 1} s'}.'
+                  : 'Current PIN is incorrect',
+              error: true);
+        }
+        return;
+      }
+      await auth.setPin(_next.text.trim());
+      if (mounted) Navigator.pop(context, true);
+    } finally {
+      _busy = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassDialog(
+      title: 'Change PIN',
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _PinInput(controller: _current, label: 'Current PIN'),
+            const SizedBox(height: 10),
+            _PinInput(
+              controller: _next,
+              label: 'New PIN',
+              validator: (v) =>
+                  (v == null || v.trim().length != 4) ? 'Enter 4 digits' : null,
+            ),
+            const SizedBox(height: 10),
+            _PinInput(
+              controller: _confirm,
+              label: 'Confirm new PIN',
+              validator: (v) =>
+                  v?.trim() != _next.text.trim() ? 'Does not match' : null,
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        GlassDialogAction('Cancel',
+            onPressed: () => Navigator.pop(context, false)),
+        GlassDialogAction('Save', primary: true, onPressed: _save),
       ],
     );
   }

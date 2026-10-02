@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -47,44 +48,116 @@ class _ReportsScreenState extends State<ReportsScreen> {
     _anchor = _ledger.month;
     // Refetch whenever ledger data changes (e.g. a payment marked elsewhere),
     // debounced so a burst of mark-paid/sync notifies re-runs the multi-month
-    // queries once instead of per-change.
+    // queries once instead of per-change. Settings too: the BS/AD calendar
+    // toggle changes what the Year scope spans (Baishakh–Chaitra vs Jan–Dec),
+    // and the escalation rate changes historical pricing.
     _ledger.addListener(_onLedgerChanged);
+    _settings.addListener(_onLedgerChanged);
     _reload();
+  }
+
+  /// False while this tab is parked off-screen (the shell keeps every branch
+  /// alive and disables its tickers). A hidden report is not recomputed — it
+  /// is marked stale and reloaded once, when the tab is shown again.
+  ValueListenable<TickerModeData>? _tickerMode;
+  bool get _visible => _tickerMode?.value.enabled ?? true;
+  bool _stale = false;
+
+  /// What the figures on screen were computed from. A notification that
+  /// leaves this unchanged (typing in the Ledger's search box, switching its
+  /// filter, a currency or appearance change) needs no query at all.
+  (int, CalendarMode, double)? _loadedFrom;
+  (int, CalendarMode, double) get _inputs => (
+        _ledger.dataRevision,
+        _settings.calendar,
+        _settings.annualRaisePercent,
+      );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final notifier = TickerMode.getValuesNotifier(context);
+    if (!identical(notifier, _tickerMode)) {
+      _tickerMode?.removeListener(_onVisibilityChanged);
+      _tickerMode = notifier..addListener(_onVisibilityChanged);
+    }
+  }
+
+  void _onVisibilityChanged() {
+    if (_visible && _stale && mounted) _reload();
   }
 
   @override
   void dispose() {
+    _tickerMode?.removeListener(_onVisibilityChanged);
     _ledger.removeListener(_onLedgerChanged);
+    _settings.removeListener(_onLedgerChanged);
     _debounce?.cancel();
     super.dispose();
   }
 
   void _onLedgerChanged() {
+    if (_inputs == _loadedFrom) return;
+    if (!_visible) {
+      _stale = true;
+      _debounce?.cancel();
+      return;
+    }
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 250), () {
-      if (mounted) _reload();
+      if (!mounted) return;
+      if (_visible) {
+        _reload();
+      } else {
+        _stale = true;
+      }
     });
   }
 
   // ---- period math -------------------------------------------------------
 
-  /// Inclusive (startMonth, endMonth) for the current scope + anchor.
-  (int, int) get _range {
+  /// Inclusive BS-month span for the current scope + anchor. In AD display
+  /// mode the Year scope is the AD calendar year containing the anchor —
+  /// January through December, a run of 12 BS months that crosses the BS
+  /// year boundary (Magh → Poush). In BS mode it stays Baishakh–Chaitra.
+  (BsMonth, BsMonth) get _range {
     switch (_scope) {
       case ReportScope.month:
-        return (_anchor.month, _anchor.month);
+        return (_anchor, _anchor);
       case ReportScope.quarter:
-        final start = ((_anchor.month - 1) ~/ 3) * 3 + 1;
-        return (start, start + 2);
+        final start =
+            BsMonth(_anchor.year, ((_anchor.month - 1) ~/ 3) * 3 + 1);
+        return (start, start.next().next());
       case ReportScope.year:
-        return (1, 12);
+        if (_settings.calendar == CalendarMode.ad) {
+          final start = _adYearStart(_anchor.yearIn(CalendarMode.ad));
+          var end = start;
+          for (var i = 0; i < 11; i++) {
+            end = end.next();
+          }
+          return (start, end);
+        }
+        return (BsMonth(_anchor.year, 1), BsMonth(_anchor.year, 12));
     }
   }
 
+  /// The BS month whose first day falls in January of AD [adYear] — where
+  /// the Jan–Dec report year starts. Computed through the calendar helpers
+  /// (a date safely inside that BS month, then a guard on the edge) rather
+  /// than a fixed year offset.
+  static BsMonth _adYearStart(int adYear) {
+    final ym = bsYearMonth(DateTime(adYear, 1, 25));
+    var m = BsMonth(ym.year, ym.month);
+    while (adForBsMonthStart(m.year, m.month).month != 1) {
+      m = adForBsMonthStart(m.year, m.month).month == 12
+          ? m.next()
+          : m.previous();
+    }
+    return m;
+  }
+
   String _periodLabel(CalendarMode mode) {
-    final (start, end) = _range;
-    final startM = BsMonth(_anchor.year, start);
-    final endM = BsMonth(_anchor.year, end);
+    final (startM, endM) = _range;
     switch (_scope) {
       case ReportScope.month:
         return _anchor.labelIn(mode);
@@ -92,19 +165,22 @@ class _ReportsScreenState extends State<ReportsScreen> {
         if (mode == CalendarMode.ad) {
           return '${startM.shortMonthNameIn(mode)}–${endM.shortMonthNameIn(mode)} ${endM.yearIn(mode)}';
         }
-        final q = (start - 1) ~/ 3 + 1;
-        return 'Q$q ${_anchor.year} · ${BsCalendar.label(start)}–${BsCalendar.label(end)}';
+        final q = (startM.month - 1) ~/ 3 + 1;
+        return 'Q$q ${_anchor.year} · ${BsCalendar.label(startM.month)}–${BsCalendar.label(endM.month)}';
       case ReportScope.year:
         if (mode == CalendarMode.ad) {
-          return '${startM.shortMonthNameIn(mode)} ${startM.yearIn(mode)} – ${endM.shortMonthNameIn(mode)} ${endM.yearIn(mode)}';
+          // The AD calendar year: "Jan – Dec 2026".
+          return '${startM.shortMonthNameIn(mode)} – ${endM.shortMonthNameIn(mode)} ${endM.yearIn(mode)}';
         }
         return '${_anchor.year} · Baishakh–Chaitra';
     }
   }
 
   void _reload() {
+    _stale = false;
+    _loadedFrom = _inputs;
     final (start, end) = _range;
-    _future = _ledger.repo.periodSummary(_anchor.year, start, end,
+    _future = _ledger.repo.periodSummarySpan(start, end,
         percent: _settings.annualRaisePercent);
     // Deposit liability is period-independent but reloads with the data so it
     // tracks unit edits / move-outs made elsewhere.
@@ -146,9 +222,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final origin = shareOriginFor(context);
     final (start, end) = _range;
     try {
-      final csv =
-          await _ledger.repo.exportCsvRange(_anchor.year, start, end);
-      final name = 'unit-ledger-${_anchor.year}-${_exportSuffix(start)}.csv';
+      final csv = await _ledger.repo.exportCsvSpan(start, end);
+      // Year scope in AD mode is the AD calendar year — name the file by it.
+      final yearLabel = _scope == ReportScope.year &&
+              _settings.calendar == CalendarMode.ad
+          ? '${end.yearIn(CalendarMode.ad)}'
+          : '${_anchor.year}';
+      final name = 'unit-ledger-$yearLabel-${_exportSuffix(start.month)}.csv';
       await shareCsv(csv, name, origin: origin);
     } catch (e) {
       showToastOn(overlay, 'Export failed: $e', error: true);
@@ -417,8 +497,9 @@ class _BreakdownRow extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: Type.subhead.colored(sys.label)),
           ),
-          // Turns green by itself once the month is fully collected.
-          Expanded(child: ProgressBar(value: bucket.progress)),
+          // Turns green by itself once the month is fully collected. Brand
+          // orange fill — one of the kit's two signature brand moments.
+          Expanded(child: ProgressBar(value: bucket.progress, color: sys.brand)),
           const SizedBox(width: 12),
           Text(
             '${Money.format(bucket.collected, currency)} / '
@@ -457,11 +538,17 @@ class _OutstandingRow extends StatelessWidget {
                 onTap: () => sendRentReminder(
                   context,
                   u,
-                  anchor,
+                  // Name the month that is actually unpaid, not the period's
+                  // anchor (a year report anchored on Ashwin with only
+                  // Baishakh unpaid used to say "rent for Ashwin").
+                  debt.unpaidMonths.length == 1
+                      ? debt.unpaidMonths.first
+                      : anchor,
                   paid: false,
                   amount: debt.amountOwed,
                   currency: currency,
                   months: debt.monthsUnpaid,
+                  mode: context.read<SettingsProvider>().calendar,
                 ),
                 child:
                     Icon(Icons.sms_outlined, size: 18, color: sys.tintText),
@@ -484,7 +571,16 @@ class _OutstandingRow extends StatelessWidget {
       ),
       chevron: true,
       // The row is the shortcut to act on the debt: open the unit's sheet.
-      onTap: () => UnitDetailSheet.show(context, u.id),
+      // The sheet works on the Ledger's selected month, so point the Ledger
+      // at the month this debt is for first (its oldest unpaid month) —
+      // otherwise "Collect" would record whatever month Home happened to be
+      // on and the debt shown here would stay outstanding (buglog B07).
+      onTap: () async {
+        final ledger = context.read<LedgerProvider>();
+        await ledger.goToMonth(
+            debt.unpaidMonths.isNotEmpty ? debt.unpaidMonths.first : anchor);
+        if (context.mounted) UnitDetailSheet.show(context, u.id);
+      },
     );
   }
 }
@@ -536,24 +632,44 @@ class _DepositCardState extends State<_DepositCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Icon(Icons.account_balance_wallet_outlined,
-                    size: 20, color: sys.secondaryLabel),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('Deposit liability',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Type.title3.semibold.colored(sys.label)),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  Money.format(l.total, currency),
-                  style: Type.title3.semibold.colored(sys.label).tabular,
-                ),
-              ],
-            ),
+            // Title and total side by side; at the accessibility text
+            // sizes the total goes under the title so neither is cut.
+            Builder(builder: (context) {
+              final title = Row(
+                children: [
+                  Icon(Icons.account_balance_wallet_outlined,
+                      size: 20, color: sys.secondaryLabel),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text('Deposit liability',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Type.title3.semibold.colored(sys.label)),
+                  ),
+                ],
+              );
+              final total = Text(
+                Money.format(l.total, currency),
+                style: Type.title3.semibold.colored(sys.label).tabular,
+              );
+              if (TextSize.large(context)) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    title,
+                    const SizedBox(height: 4),
+                    FittedBox(fit: BoxFit.scaleDown, child: total),
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: title),
+                  const SizedBox(width: 12),
+                  TrailingValue(child: total),
+                ],
+              );
+            }),
             const SizedBox(height: 12),
             // The split, as an inset list inside the card.
             Well(
@@ -690,9 +806,11 @@ class _DepositLine extends StatelessWidget {
                   .colored(warn ? sys.orangeText : sys.secondaryLabel)),
         ),
         const SizedBox(width: 12),
-        Text(
-          Money.format(amount, currency),
-          style: Type.subhead.semibold.colored(color).tabular,
+        TrailingValue(
+          child: Text(
+            Money.format(amount, currency),
+            style: Type.subhead.semibold.colored(color).tabular,
+          ),
         ),
       ],
     );
@@ -715,36 +833,51 @@ class _SummaryGrid extends StatelessWidget {
     ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(Sys.gutter, 0, Sys.gutter, 12),
-      child: GridView.count(
-        crossAxisCount: 2,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        // Tall enough for caption + Title 2 at 14 pt padding, with room for
-        // a couple of Dynamic Type steps.
-        childAspectRatio: 1.8,
+      // Two cards per row, as tall as their text needs: a fixed-ratio grid
+      // clipped the figures once the text size went up.
+      child: Column(
         children: [
-          for (final c in cells)
-            GroupedCard(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
+          for (var i = 0; i < cells.length; i += 2) ...[
+            if (i > 0) const SizedBox(height: 12),
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(c.$1, style: Type.caption1.colored(sys.secondaryLabel)),
-                  const SizedBox(height: 4),
-                  // Big totals shrink to fit rather than truncate.
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Text(c.$2,
-                        maxLines: 1,
-                        style: Type.title2.semibold.tabular.colored(c.$3)),
-                  ),
+                  for (final c in cells.skip(i).take(2)) ...[
+                    if (c != cells[i]) const SizedBox(width: 12),
+                    Expanded(
+                      child: GroupedCard(
+                        padding: const EdgeInsets.all(14),
+                        child: ConstrainedBox(
+                          // The height the old 1.8 grid gave at default text.
+                          constraints: const BoxConstraints(minHeight: 62),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(c.$1,
+                                  style: Type.caption1
+                                      .colored(sys.secondaryLabel)),
+                              const SizedBox(height: 4),
+                              // Big totals shrink to fit rather than truncate.
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Text(c.$2,
+                                    maxLines: 1,
+                                    style: Type.title2.semibold.tabular
+                                        .colored(c.$3)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
+          ],
         ],
       ),
     );

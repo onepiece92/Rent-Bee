@@ -17,17 +17,21 @@ import '../widgets/toast.dart';
 /// [months] > 1 switches to period wording ("across N months") for a debt
 /// accumulated over several months — quoting a single month's label there
 /// would misstate what the amount covers.
+///
+/// [mode] is the calendar the owner reads dates in: the month is named in it
+/// ("May 2026" for AD users), not always in Bikram Sambat.
 String rentReminderText(Unit unit, BsMonth month,
     {required bool paid,
     required int amount,
     required Currency currency,
-    int months = 1}) {
+    int months = 1,
+    CalendarMode mode = CalendarMode.bs}) {
   if (!paid && months > 1 && amount > 0) {
     return 'Hi ${unit.tenantName}, gentle reminder: outstanding rent of '
         '${Money.format(amount, currency)} across $months months is due. '
         'Thank you!';
   }
-  final when = '${month.monthName} ${month.year}';
+  final when = month.labelIn(mode);
   if (paid) {
     return amount > 0
         ? 'Hi ${unit.tenantName}, thank you — we have received your $when '
@@ -77,10 +81,15 @@ Future<void> sendRentReminder(
   required int amount,
   required Currency currency,
   int months = 1,
+  CalendarMode mode = CalendarMode.bs,
 }) async {
   final phone = unit.phone;
   if (phone == null || phone.isEmpty) return;
   await sendSms(context, phone,
       body: rentReminderText(unit, month,
-          paid: paid, amount: amount, currency: currency, months: months));
+          paid: paid,
+          amount: amount,
+          currency: currency,
+          months: months,
+          mode: mode));
 }

@@ -50,7 +50,8 @@ class UnitDetailSheet extends StatelessWidget {
         // head
         Row(
           children: [
-            CodeAvatar(code: s.code, paid: true, size: 52),
+            // Green only once this month is settled (it was always green).
+            CodeAvatar(code: s.code, paid: row.isPaid, size: 52),
             const SizedBox(width: 11),
             Expanded(
               child: Column(
@@ -92,8 +93,11 @@ class UnitDetailSheet extends StatelessWidget {
                   ? null
                   : () => sendRentReminder(context, s, ledger.month,
                       paid: row.isPaid,
-                      amount: row.totalDue,
-                      currency: currency),
+                      // What is still owed: a part-paid month reminds for
+                      // the remainder, not the whole due.
+                      amount: row.isPartial ? row.remaining : row.totalDue,
+                      currency: currency,
+                      mode: mode),
               trailingIcon: (s.phone == null || s.phone!.isEmpty)
                   ? null
                   : Icons.sms_outlined,
@@ -126,8 +130,10 @@ class UnitDetailSheet extends StatelessWidget {
 
         const SizedBox(height: 20),
         // Charges + deduction sections, fed by a single charges-row load.
+        // (the month's rent, not the headline rent: a past month may predate
+        // a raise, or be pinned to the rent its payment was made against)
         UnitMonthAdjustments(
-            unitId: s.id, monthlyRent: s.monthlyRent, month: ledger.month),
+            unitId: s.id, monthlyRent: row.monthRent, month: ledger.month),
 
         const SizedBox(height: 20),
         const SectionTitle('Recent months',
@@ -140,6 +146,9 @@ class UnitDetailSheet extends StatelessWidget {
 
   Future<void> _confirmDelete(
       BuildContext context, LedgerProvider ledger, Unit s) async {
+    // Captured before the awaits: if the sheet is dismissed while the delete
+    // is in flight, the pop below must not close the route beneath it.
+    final route = ModalRoute.of(context);
     final ok = await showGlassDialog<bool>(
       context,
       (ctx) => GlassDialog(
@@ -156,7 +165,9 @@ class UnitDetailSheet extends StatelessWidget {
     );
     if (ok == true) {
       await ledger.deleteUnit(s.id);
-      if (context.mounted) Navigator.of(context).pop();
+      if (context.mounted && (route?.isCurrent ?? true)) {
+        Navigator.of(context).pop();
+      }
     }
   }
 }
@@ -165,7 +176,7 @@ class UnitDetailSheet extends StatelessWidget {
 /// spelled out, with zero parts omitted. Shown wherever the due differs from
 /// the headline rent so the math stays transparent.
 String _dueBreakdown(UnitRow row, Currency currency) => [
-      '${Money.format(row.unit.monthlyRent, currency)} rent',
+      '${Money.format(row.monthRent, currency)} rent',
       if (row.charges > 0) '+ ${Money.format(row.charges, currency)} charges',
       if (row.deduction > 0)
         '− ${Money.format(row.deduction, currency)} deducted',
@@ -255,6 +266,15 @@ class _BigToggleButton extends StatelessWidget {
         );
 
       case PayStatus.pending:
+        if (!row.started) {
+          // The selected month is before this tenant moved in.
+          return const AppButton(
+            label: 'Not rented yet this month',
+            onTap: null,
+            kind: ButtonKind.gray,
+            expand: true,
+          );
+        }
         if (due == 0) {
           // Rent 0, no charges and nothing deducted: there is nothing to
           // collect, and a Collect tap would only write an empty payment row.
@@ -299,6 +319,7 @@ class _BigToggleButton extends StatelessWidget {
   Future<void> _recordPartial(
       BuildContext context, LedgerProvider ledger) async {
     final currency = context.read<SettingsProvider>().currency;
+    final mode = context.read<SettingsProvider>().calendar;
     final ctrl = TextEditingController(
         text: payment == null ? '' : payment!.amount.toString());
     final result = await showGlassDialog<int>(
@@ -312,10 +333,9 @@ class _BigToggleButton extends StatelessWidget {
               row.charges > 0 || row.deduction > 0
                   ? 'Due is ${Money.format(row.totalDue, currency)} '
                       '(${_dueBreakdown(row, currency)}). Enter the '
-                      'total received for ${month.monthName} ${month.year}.'
-                  : 'Rent is ${Money.format(unit.monthlyRent, currency)}. '
-                      'Enter the total received for ${month.monthName} '
-                      '${month.year}.',
+                      'total received for ${month.labelIn(mode)}.'
+                  : 'Rent is ${Money.format(row.monthRent, currency)}. '
+                      'Enter the total received for ${month.labelIn(mode)}.',
             ),
             const SizedBox(height: 12),
             TextField(
@@ -428,7 +448,13 @@ class _HistoryStripState extends State<_HistoryStrip> {
       percent: context.read<SettingsProvider>().annualRaisePercent);
 
   void _reload() {
-    if (mounted) setState(() => _future = _load());
+    // Block body: an arrow would *return* the Future, which setState rejects
+    // in debug builds (and the reload would be dropped).
+    if (mounted) {
+      setState(() {
+        _future = _load();
+      });
+    }
   }
 
   @override
@@ -452,11 +478,15 @@ class _HistoryStripState extends State<_HistoryStrip> {
         }
         // repo returns newest-first; reverse so oldest is left, current right.
         final entries = data.reversed.toList();
-        return Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            for (final e in entries) _HistoryCell(entry: e, mode: mode),
-          ],
+        // A fixed strip of six cells: its month labels stop growing at the
+        // large text sizes (they would run into each other).
+        return TextSize.capped(
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              for (final e in entries) _HistoryCell(entry: e, mode: mode),
+            ],
+          ),
         );
       },
     );
@@ -472,13 +502,25 @@ class _HistoryCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sys = Sys.of(context);
-    return Column(
-      children: [
-        _HistoryChip(entry: entry),
-        const SizedBox(height: 6),
-        Text(BsMonth(entry.year, entry.month).shortMonthNameIn(mode),
-            style: Type.caption2.colored(sys.secondaryLabel)),
-      ],
+    final month = BsMonth(entry.year, entry.month);
+    // The chip is colour and shape only; say the state for VoiceOver/TalkBack.
+    final state = entry.isPaid
+        ? 'paid'
+        : entry.isPartial
+            ? 'part paid'
+            : 'not paid';
+    return Semantics(
+      container: true, // one node per month
+      label: '${month.labelIn(mode)}, $state',
+      excludeSemantics: true,
+      child: Column(
+        children: [
+          _HistoryChip(entry: entry),
+          const SizedBox(height: 6),
+          Text(month.shortMonthNameIn(mode),
+              style: Type.caption2.colored(sys.secondaryLabel)),
+        ],
+      ),
     );
   }
 }

@@ -22,7 +22,11 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _searchCtrl = TextEditingController();
+  // Seeded from the provider: the query lives above the router and survives
+  // a lock/unlock, while this screen (and its text field) is rebuilt empty —
+  // which left the list filtered by text the box no longer showed.
+  late final _searchCtrl =
+      TextEditingController(text: context.read<LedgerProvider>().query);
 
   @override
   void dispose() {
@@ -67,6 +71,14 @@ class _HomeScreenState extends State<HomeScreen> {
             Consumer<LedgerProvider>(
               builder: (context, ledger, _) {
                 final sys = Sys.of(context);
+                if (ledger.loadError != null && !ledger.loading) {
+                  return SliverToBoxAdapter(
+                    child: _LoadError(
+                      error: ledger.loadError!,
+                      onRetry: () => ledger.refresh(showLoading: true),
+                    ),
+                  );
+                }
                 if (ledger.loading) {
                   return const SliverToBoxAdapter(
                     child: Padding(
@@ -184,25 +196,29 @@ class _Header extends StatelessWidget {
           // Subhead: the year in the active calendar and the app name, the
           // cloud-sync state (hidden when not signed in / local-only), and
           // today's date — tap to jump back to the current month.
-          Row(
+          // A Wrap: at large text sizes the date chip drops to its own line
+          // instead of pushing the row past the screen edge.
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 4,
             children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        '${month.yearIn(mode)} · Rent Bee',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Type.subhead.colored(sys.secondaryLabel).tabular,
-                      ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      '${month.yearIn(mode)} · Rent Bee',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Type.subhead.colored(sys.secondaryLabel).tabular,
                     ),
-                    const SizedBox(width: 8),
-                    const SyncBadge(),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 8),
+                  const SyncBadge(),
+                ],
               ),
-              const SizedBox(width: 8),
               _TodayChip(
                 mode: mode,
                 isCurrent: month == currentMonth,
@@ -284,7 +300,9 @@ class _SummaryCard extends StatelessWidget {
               style: Type.footnote.colored(sys.secondaryLabel).tabular,
             ),
             const SizedBox(height: 14),
-            ProgressBar(value: summary.progress),
+            // The one brand moment on this screen: money filling up in
+            // Rent Bee orange (still green once the month fully collects).
+            ProgressBar(value: summary.progress, color: sys.brand),
             const SizedBox(height: 14),
             Row(
               children: [
@@ -370,8 +388,11 @@ class _SearchAndFilter extends StatelessWidget {
   Widget build(BuildContext context) {
     final sys = Sys.of(context);
     // Scoped to its own widget so the query/filter watch rebuilds only this
-    // bar, not the header or summary above.
-    final ledger = context.watch<LedgerProvider>();
+    // bar, not the header or summary above — and only when one of the two
+    // changes, not on every data reload.
+    context.select<LedgerProvider, (bool, LedgerFilter)>(
+        (l) => (l.query.isNotEmpty, l.filter));
+    final ledger = context.read<LedgerProvider>();
     return Padding(
       padding: const EdgeInsets.fromLTRB(Sys.gutter, 8, Sys.gutter, 8),
       child: Column(
@@ -408,12 +429,16 @@ class _SearchAndFilter extends StatelessWidget {
                   ),
                 ),
                 if (ledger.query.isNotEmpty)
-                  TapTarget(
-                    onTap: () {
-                      controller.clear();
-                      ledger.setQuery('');
-                    },
-                    child: Icon(Icons.close, size: 18, color: sys.secondaryLabel),
+                  Tooltip(
+                    message: 'Clear search',
+                    child: TapTarget(
+                      onTap: () {
+                        controller.clear();
+                        ledger.setQuery('');
+                      },
+                      child: Icon(Icons.close,
+                          size: 18, color: sys.secondaryLabel),
+                    ),
                   )
                 else
                   const SizedBox(width: 10),
@@ -450,6 +475,7 @@ class _UnitTile extends StatelessWidget {
     final s = row.unit;
     final paid = row.isPaid;
     final currency = context.watch<SettingsProvider>().currency;
+    final stackedText = TextSize.large(context);
     // A transparent Material of its own, so the press ink paints above the
     // card colour that DecoratedSliver draws behind the list.
     return Material(
@@ -462,94 +488,119 @@ class _UnitTile extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.symmetric(
                 horizontal: Sys.gutter, vertical: 12),
-            child: Row(
-              children: [
-                CodeAvatar(code: s.code, paid: paid),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        s.tenantName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Type.body.semibold.colored(sys.label),
-                      ),
-                      Text(
-                        s.businessType.isEmpty ? '—' : s.businessType,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Type.footnote.colored(sys.secondaryLabel),
-                      ),
-                    ],
+            child: SplitRow(
+              leading: CodeAvatar(code: s.code, paid: paid),
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    s.tenantName,
+                    maxLines: stackedText ? 2 : 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Type.body.semibold.colored(sys.label),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                  Text(
+                    s.businessType.isEmpty ? '—' : s.businessType,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Type.footnote.colored(sys.secondaryLabel),
+                  ),
+                ],
+              ),
+              trailing: (context, stacked) {
+                // What's due this month — rent plus utility charges, less
+                // any deduction for goods taken from the shop — so the row
+                // matches the Collect action.
+                final due = Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: stacked
+                      ? CrossAxisAlignment.start
+                      : CrossAxisAlignment.end,
                   children: [
-                    // What's due this month — rent plus utility charges, less
-                    // any deduction for goods taken from the shop — so the row
-                    // matches the Collect action.
                     Text(
                       Money.format(row.totalDue, currency),
                       style: Type.subhead.semibold.tabular.colored(sys.label),
                     ),
                     if (row.charges > 0 || row.deduction > 0)
+                      // Wraps within the trailing block's width rather than
+                      // squeezing the tenant's name out of the row.
                       Text(
                         [
                           if (row.charges > 0)
                             '+ ${Money.format(row.charges, currency)} charges',
                           if (row.deduction > 0)
                             '− ${Money.format(row.deduction, currency)} deducted',
-                        ].join(' · '),
+                        ].join(stacked ? ' · ' : '\n'),
+                        textAlign: stacked ? TextAlign.start : TextAlign.end,
                         style:
                             Type.caption2.colored(sys.secondaryLabel).tabular,
                       ),
-                    const SizedBox(height: 6),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // A vacated unit is display-only: no rent reminder to
-                        // a former tenant, no mark-paid — just a Vacant badge.
-                        // (Late back-payments can still be recorded from the
-                        // detail sheet.)
-                        if (!s.isActive)
-                          const _VacantPill()
-                        else ...[
-                          // Quick rent reminder — only when a phone is on file.
-                          if (s.phone != null && s.phone!.isNotEmpty) ...[
-                            _CardSmsButton(
-                              onTap: () => sendRentReminder(
-                                context,
-                                s,
-                                context.read<LedgerProvider>().month,
-                                paid: paid,
-                                amount: row.totalDue,
-                                currency: currency,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                          ],
-                          switch (row.status) {
-                            PayStatus.paid => const StatusPill(paid: true),
-                            PayStatus.partial => _PartialPill(
-                                remaining: row.remaining, currency: currency),
-                            // Nothing to collect (rent not set) → no pill.
-                            PayStatus.pending when row.totalDue == 0 =>
-                              const SizedBox.shrink(),
-                            PayStatus.pending => _MarkPaidPill(
-                              onTap: () =>
-                                  context.read<LedgerProvider>().markPaid(s),
-                            ),
-                          },
-                        ],
-                      ],
-                    ),
                   ],
-                ),
-              ],
+                );
+                final actions = Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // A vacated unit is display-only: no rent reminder to
+                    // a former tenant, no mark-paid — just a Vacant badge.
+                    // (Late back-payments can still be recorded from the
+                    // detail sheet.)
+                    if (!s.isActive)
+                      const _VacantPill()
+                    else ...[
+                      // Quick rent reminder — only when a phone is on file.
+                      if (s.phone != null && s.phone!.isNotEmpty) ...[
+                        _CardSmsButton(
+                          onTap: () => sendRentReminder(
+                            context,
+                            s,
+                            context.read<LedgerProvider>().month,
+                            paid: paid,
+                            amount: row.isPartial
+                                ? row.remaining
+                                : row.totalDue,
+                            currency: currency,
+                            mode: context.read<SettingsProvider>().calendar,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      switch (row.status) {
+                        PayStatus.paid => const StatusPill(paid: true),
+                        PayStatus.partial => _PartialPill(
+                            remaining: row.remaining, currency: currency),
+                        // Nothing to collect (rent not set) → no pill.
+                        PayStatus.pending when row.totalDue == 0 =>
+                          const SizedBox.shrink(),
+                        PayStatus.pending => _MarkPaidPill(
+                          onTap: () =>
+                              context.read<LedgerProvider>().markPaid(s),
+                        ),
+                      },
+                    ],
+                  ],
+                );
+                if (stacked) {
+                  return Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 12,
+                    runSpacing: 6,
+                    children: [
+                      due,
+                      FittedBox(fit: BoxFit.scaleDown, child: actions),
+                    ],
+                  );
+                }
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    due,
+                    const SizedBox(height: 6),
+                    FittedBox(fit: BoxFit.scaleDown, child: actions),
+                  ],
+                );
+              },
             ),
           ),
         ),
@@ -568,18 +619,22 @@ class _CardSmsButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final sys = Sys.of(context);
     // Drawn at 30 pt; TapTarget pads the hit area out to the HIG's 44 pt.
-    return TapTarget(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 30,
-        height: 30,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: sys.well,
-          borderRadius: BorderRadius.circular(9),
+    // The tooltip is also the screen-reader label of this icon-only button.
+    return Tooltip(
+      message: 'Send reminder',
+      child: TapTarget(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          width: 30,
+          height: 30,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: sys.well,
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Icon(Icons.sms_outlined, size: 16, color: sys.tintText),
         ),
-        child: Icon(Icons.sms_outlined, size: 16, color: sys.tintText),
       ),
     );
   }
@@ -626,6 +681,58 @@ class _MarkPaidPill extends StatelessWidget {
       kind: ButtonKind.tinted,
       compact: true,
       onTap: onTap,
+    );
+  }
+}
+
+/// The ledger could not be loaded (the database failed to open, migrate or
+/// answer). Says so, with the reason and a way to try again — instead of a
+/// spinner that never ends.
+class _LoadError extends StatelessWidget {
+  final Object error;
+  final VoidCallback onRetry;
+  const _LoadError({required this.error, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final sys = Sys.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(Sys.gutter, 8, Sys.gutter, 8),
+      child: GroupedCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.error_outline, color: sys.redText),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Could not load your ledger',
+                      style: Type.headline.colored(sys.label)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Your data has not been changed. Try again; if this keeps '
+              'happening, restart the app.',
+              style: Type.subhead.colored(sys.secondaryLabel),
+            ),
+            const SizedBox(height: 6),
+            Text('$error',
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+                style: Type.caption1.colored(sys.secondaryLabel)),
+            const SizedBox(height: 12),
+            AppButton(
+              label: 'Try again',
+              icon: Icons.refresh,
+              kind: ButtonKind.tinted,
+              onTap: onRetry,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

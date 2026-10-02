@@ -198,4 +198,49 @@ void main() {
     expect(json, contains('1500'));
     expect(json, contains('24000'));
   });
+
+  group('inspectBackup — what a file holds, before anything is replaced (B13)',
+      () {
+    test('counts the rows and reads the export date without touching data',
+        () async {
+      final id = await repo.createUnit(UnitsCompanion.insert(
+          code: 'A-01', tenantName: 'Asha', monthlyRent: 12000));
+      final unit = await unitById(repo, id);
+      await repo.createUnit(UnitsCompanion.insert(
+          code: 'A-02', tenantName: 'Bina', monthlyRent: 9000));
+      await repo.markPaid(unit, 2082, 2);
+      await repo.setCharges(id, 2082, 2, electricity: 1500);
+      final json = await repo.exportBackupJson();
+
+      // The live ledger moves on after the export…
+      await repo.createUnit(UnitsCompanion.insert(
+          code: 'A-03', tenantName: 'Chandra', monthlyRent: 7000));
+
+      final info = LedgerRepository.inspectBackup(json);
+      expect(info.units, 2);
+      expect(info.payments, 1);
+      expect(info.charges, 1);
+      expect(info.exportedAt, isNotNull);
+      expect(DateTime.now().difference(info.exportedAt!).inMinutes, 0);
+
+      // …and looking at the file changed nothing.
+      expect((await repo.allUnits()).length, 3);
+    });
+
+    test('rejects a file that is not a Rent Bee backup', () {
+      expect(() => LedgerRepository.inspectBackup('{"app":"other"}'),
+          throwsFormatException);
+      expect(() => LedgerRepository.inspectBackup('[1,2,3]'),
+          throwsFormatException);
+      expect(() => LedgerRepository.inspectBackup('code,tenant\nA-01,x'),
+          throwsFormatException);
+    });
+
+    test('an empty backup reports zero units (the screen refuses it)', () {
+      final info = LedgerRepository.inspectBackup(
+          '{"app":"rent-bee","type":"backup","version":1}');
+      expect(info.units, 0);
+      expect(info.exportedAt, isNull);
+    });
+  });
 }

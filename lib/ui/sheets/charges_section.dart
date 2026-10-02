@@ -48,7 +48,11 @@ class _UnitMonthAdjustmentsState extends State<UnitMonthAdjustments> {
 
   void _reload() {
     if (mounted) {
-      setState(() => _future = _ledger.chargesFor(widget.unitId));
+      // Block body: an arrow would *return* the Future, which setState
+      // rejects in debug builds (and the reload would be dropped).
+      setState(() {
+        _future = _ledger.chargesFor(widget.unitId);
+      });
     }
   }
 
@@ -145,6 +149,7 @@ class ChargesSection extends StatelessWidget {
   Future<void> _edit(BuildContext context) async {
     final ledger = context.read<LedgerProvider>();
     final currency = context.read<SettingsProvider>().currency;
+    final mode = context.read<SettingsProvider>().calendar;
     String pre(int v) => v == 0 ? '' : v.toString();
     final eCtrl = TextEditingController(text: pre(charge?.electricity ?? 0));
     final wCtrl = TextEditingController(text: pre(charge?.water ?? 0));
@@ -153,7 +158,7 @@ class ChargesSection extends StatelessWidget {
     final saved = await showGlassDialog<bool>(
       context,
       (ctx) => GlassDialog(
-        title: 'Charges · ${month.monthName} ${month.year}',
+        title: 'Charges · ${month.labelIn(mode)}',
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -258,6 +263,7 @@ class DeductionSection extends StatelessWidget {
   Future<void> _edit(BuildContext context) async {
     final ledger = context.read<LedgerProvider>();
     final currency = context.read<SettingsProvider>().currency;
+    final mode = context.read<SettingsProvider>().calendar;
     final d = charge?.deduction ?? 0;
     final amountCtrl = TextEditingController(text: d == 0 ? '' : d.toString());
     final noteCtrl = TextEditingController(text: charge?.deductionNote ?? '');
@@ -265,7 +271,7 @@ class DeductionSection extends StatelessWidget {
     final saved = await showGlassDialog<bool>(
       context,
       (ctx) => GlassDialog(
-        title: 'Deduction · ${month.monthName} ${month.year}',
+        title: 'Deduction · ${month.labelIn(mode)}',
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -365,13 +371,16 @@ class _ChargeRow extends StatelessWidget {
               ],
             ),
           ),
-          Text(
-              amount == 0 && !bold
-                  ? '—'
-                  : '${negative ? '− ' : ''}${Money.format(amount, currency)}',
-              style: (bold ? Type.subhead.semibold : Type.subhead)
-                  .colored(sys.label)
-                  .tabular),
+          const SizedBox(width: 8),
+          TrailingValue(
+            child: Text(
+                amount == 0 && !bold
+                    ? '—'
+                    : '${negative ? '− ' : ''}${Money.format(amount, currency)}',
+                style: (bold ? Type.subhead.semibold : Type.subhead)
+                    .colored(sys.label)
+                    .tabular),
+          ),
         ],
       ),
     );

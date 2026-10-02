@@ -73,6 +73,12 @@ class Sys {
   /// For coloured *text* (increased-contrast value in light mode).
   final Color tintText;
 
+  /// Rent Bee's brand orange (#FF6600; lifted in dark mode). Used sparingly,
+  /// by design: signature moments only — today, the money progress fills on
+  /// Home and Reports. Everything semantic or interactive stays on the Apple
+  /// palette; do not spread this onto buttons, badges or selection.
+  final Color brand;
+
   // Status colours, same fill/text split.
   final Color green, greenText;
   final Color orange, orangeText;
@@ -94,6 +100,7 @@ class Sys {
     required this.tertiaryFill,
     required this.tint,
     required this.tintText,
+    required this.brand,
     required this.green,
     required this.greenText,
     required this.orange,
@@ -119,6 +126,7 @@ class Sys {
     tertiaryFill: Color(0x1F767680), // 118 118 128 / 12%
     tint: Color(0xFF0088FF), // blue 0 136 255
     tintText: Color(0xFF1E6EF4), // blue IC 30 110 244 (4.57:1 on white)
+    brand: Color(0xFFFF6600),
     green: Color(0xFF34C759),
     greenText: Color(0xFF008932), // green IC
     orange: Color(0xFFFF8D28),
@@ -144,6 +152,7 @@ class Sys {
     tertiaryFill: Color(0x3D767680), // 118 118 128 / 24%
     tint: Color(0xFF0091FF), // blue 0 145 255
     tintText: Color(0xFF0091FF), // 5.26:1 on #1C1C1E
+    brand: Color(0xFFFF751F), // brand, lifted for dark (6.1:1 on #1C1C1E)
     green: Color(0xFF30D158),
     greenText: Color(0xFF30D158),
     orange: Color(0xFFFF9230),

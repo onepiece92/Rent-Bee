@@ -1,4 +1,5 @@
 import '../data/database.dart';
+import 'bs_calendar.dart';
 
 /// Payment state of a unit for a given month.
 enum PayStatus { pending, partial, paid }
@@ -37,14 +38,34 @@ class UnitRow {
   /// Landlord's deduction against this month's rent (0 = none). See [netDue].
   final int deduction;
 
-  const UnitRow(
-      {required this.unit, this.payment, this.charges = 0, this.deduction = 0});
+  /// The rent that applies to THIS month, when it differs from the unit's
+  /// current rent: the rent a recorded payment was made against, or the rent
+  /// in effect back then (before a later raise). Null = the current rent.
+  final int? rent;
+
+  /// False for a month before the tenant moved in: nothing was owed, so the
+  /// row offers nothing to collect.
+  final bool started;
+
+  const UnitRow({
+    required this.unit,
+    this.payment,
+    this.charges = 0,
+    this.deduction = 0,
+    this.rent,
+    this.started = true,
+  });
 
   /// Amount recorded for this month so far (0 if no payment row).
   int get paidAmount => payment?.amount ?? 0;
 
-  /// Cash due this month: rent + charges − deduction, floored at 0.
-  int get totalDue => netDue(unit.monthlyRent, deduction, charges: charges);
+  /// This month's rent (see [rent]).
+  int get monthRent => rent ?? unit.monthlyRent;
+
+  /// Cash due this month: rent + charges − deduction, floored at 0. Nothing
+  /// is due for a month before the tenancy started.
+  int get totalDue =>
+      started ? netDue(monthRent, deduction, charges: charges) : 0;
 
   /// Remaining due against this month's [totalDue], floored at 0.
   int get remaining => (totalDue - paidAmount).clamp(0, totalDue);
@@ -70,22 +91,46 @@ class MonthSummary {
   final int partialCount; // active units with a partial payment this month
   final int activeCount; // active units total
 
+  /// What is still owed: each active unit's own shortfall (due − paid, never
+  /// negative), added up. Null only for summaries built without it.
+  final int? outstanding;
+
   const MonthSummary({
     required this.expected,
     required this.collected,
     required this.paidCount,
     this.partialCount = 0,
     required this.activeCount,
+    this.outstanding,
   });
 
-  /// Outstanding amount, floored at 0 — a unit that overpaid (e.g. rent was
-  /// lowered after a higher payment was captured) never shows negative pending.
-  int get pending => (expected - collected).clamp(0, expected);
+  /// Outstanding amount. Per-unit shortfalls, NOT `expected − collected`:
+  /// `collected` also counts money from since-vacated units and overpayments,
+  /// which would hide another unit's unpaid rent (one tenant owing 10,000 and
+  /// a vacated one having paid 10,000 used to read as "nothing pending" —
+  /// buglog B06).
+  int get pending => outstanding ?? (expected - collected).clamp(0, expected);
 
   /// Collected fraction 0.0–1.0 (guards divide-by-zero).
   double get progress => expected == 0 ? 0 : (collected / expected).clamp(0, 1);
 
   int get percent => (progress * 100).round();
+
+  // Value equality, so a widget selecting the summary rebuilds only when a
+  // figure actually changed — not on every reload that produced the same one.
+  @override
+  bool operator ==(Object other) =>
+      other is MonthSummary &&
+      other.expected == expected &&
+      other.collected == collected &&
+      other.paidCount == paidCount &&
+      other.partialCount == partialCount &&
+      other.activeCount == activeCount &&
+      other.outstanding == outstanding;
+
+  @override
+  int get hashCode => Object.hash(
+      expected, collected, paidCount, partialCount, activeCount, outstanding);
 }
 
 /// Reporting granularity for the Reports screen.
@@ -113,14 +158,18 @@ class MonthBucket {
   final int expected;
   final int collected;
 
+  /// Per-unit shortfalls for this month, added up (see [MonthSummary.pending]).
+  final int? outstanding;
+
   const MonthBucket({
     required this.year,
     required this.month,
     required this.expected,
     required this.collected,
+    this.outstanding,
   });
 
-  int get pending => (expected - collected).clamp(0, expected);
+  int get pending => outstanding ?? (expected - collected).clamp(0, expected);
 
   double get progress =>
       expected == 0 ? 0 : (collected / expected).clamp(0, 1);
@@ -129,13 +178,18 @@ class MonthBucket {
 /// One unit's unpaid total across a multi-month period.
 class PeriodDebt {
   final Unit unit;
-  final int amountOwed; // unpaid months × current monthly_rent
+  final int amountOwed; // the shortfalls of the unpaid months, added up
   final int monthsUnpaid;
+
+  /// The months this unit still owes for, oldest first — so the UI can act
+  /// on (and a reminder can name) the right month, not just "the period".
+  final List<BsMonth> unpaidMonths;
 
   const PeriodDebt({
     required this.unit,
     required this.amountOwed,
     required this.monthsUnpaid,
+    this.unpaidMonths = const [],
   });
 }
 
@@ -174,7 +228,9 @@ class PeriodSummary {
     required this.outstanding,
   });
 
-  int get pending => (expected - collected).clamp(0, expected);
+  /// What is still owed across the period: the [outstanding] units' own
+  /// shortfalls, not `expected − collected` (see [MonthSummary.pending]).
+  int get pending => outstanding.fold(0, (sum, d) => sum + d.amountOwed);
 
   double get progress =>
       expected == 0 ? 0 : (collected / expected).clamp(0, 1);

@@ -116,7 +116,9 @@ class _UnitLedgerAppState extends State<UnitLedgerApp>
   late final AuthProvider _auth = widget.auth;
   late final SettingsProvider _settings = widget.settings;
   late final LedgerProvider _ledger =
-      LedgerProvider(widget.repo, initialMonth: _initialMonth())
+      LedgerProvider(widget.repo,
+          initialMonth: _initialMonth(),
+          raisePercent: () => widget.settings.annualRaisePercent)
         ..init(annualRaisePercent: widget.settings.annualRaisePercent);
   late final _router = buildRouter(_auth);
   final SyncStatusController _syncStatus = SyncStatusController();
@@ -130,6 +132,17 @@ class _UnitLedgerAppState extends State<UnitLedgerApp>
     // Bring cloud sync online once the owner unlocks (and tear it down on
     // sign-out). Driven off the auth state so it never blocks cold start.
     _auth.addListener(_syncLifecycle);
+    // Mirror settings changes (calendar + currency + rate) to the cloud
+    // whenever a sync session is live. Wired once, here, and resolved at call
+    // time: wiring it only after sync had finished starting dropped any
+    // change made during that window (buglog B26).
+    _lastRate = _settings.annualRaisePercent;
+    _settings.addListener(_onSettingsChanged);
+    _settings.cloudPush = () => widget.repo.sync?.pushSettings(
+          _settings.calendar.name,
+          _settings.annualRaisePercent,
+          _settings.currency.name,
+        );
     _syncLifecycle();
   }
 
@@ -137,7 +150,30 @@ class _UnitLedgerAppState extends State<UnitLedgerApp>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _auth.removeListener(_syncLifecycle);
+    _settings.removeListener(_onSettingsChanged);
     super.dispose();
+  }
+
+  // Built once: every setting notifies, and two fresh ThemeData per
+  // notification made the whole app re-resolve its theme for nothing.
+  late final _lightTheme =
+      buildTheme(Brightness.light, fontFamily: widget.fontFamily);
+  late final _darkTheme =
+      buildTheme(Brightness.dark, fontFamily: widget.fontFamily);
+
+  // Read once in initState, before listening. (As a lazy `late` initializer it
+  // was first evaluated inside the listener — after the change — so the rate
+  // always looked unchanged and the refresh never ran.)
+  late double _lastRate;
+
+  /// A past month is priced at the rent in effect then, which depends on the
+  /// escalation rate — so a rate change (made here or on another device) must
+  /// re-price the month on screen.
+  void _onSettingsChanged() {
+    final rate = _settings.annualRaisePercent;
+    if (rate == _lastRate) return;
+    _lastRate = rate;
+    _ledger.refresh(keepOrder: true);
   }
 
   @override
@@ -176,25 +212,26 @@ class _UnitLedgerAppState extends State<UnitLedgerApp>
           repo: repo,
           prefs: widget.prefs,
           auth: _auth,
-          onApply: () => _ledger.refresh(),
+          // A remote change must not reshuffle the list under the finger.
+          onApply: () => _ledger.refresh(keepOrder: true),
           status: _syncStatus,
           onRemoteSettings: (mode, rate, currency) => _settings
               .applyRemoteSettings(
                   calendarMode: mode, rate: rate, currency: currency),
-          localCalendarMode: _settings.calendar.name,
-          localRate: _settings.annualRaisePercent,
-          localCurrency: _settings.currency.name,
+          localSettings: () => (
+            calendarMode: _settings.calendar.name,
+            rate: _settings.annualRaisePercent,
+            currency: _settings.currency.name,
+          ),
+          settingsRevision: () => _settings.localRevision,
         );
-        // Mirror future settings changes (calendar + currency + rate) to the
-        // cloud — unless the owner signed out while startSync was in flight
-        // (the stop branch below already ran in a re-entrant call; don't
-        // leave a stale push closure behind).
         if (service != null && _auth.phoneVerified) {
-          _settings.cloudPush = () => service.pushSettings(
-                _settings.calendar.name,
-                _settings.annualRaisePercent,
-                _settings.currency.name,
-              );
+          // The startup catch-up in LedgerProvider.init ran before sync
+          // existed, so its raises were never pushed — and the pull that just
+          // finished overwrote them with the cloud's pre-raise rents. Apply
+          // them again now that they will be pushed and stick (buglog B02).
+          final rate = _settings.annualRaisePercent;
+          if (rate > 0) await _ledger.applyDueRaises(rate);
         }
       } catch (e) {
         // A failed start must not wedge `_syncStarting` (that would disable
@@ -208,7 +245,6 @@ class _UnitLedgerAppState extends State<UnitLedgerApp>
     // Stop: signed out (identity cleared) while a session was live.
     if (!_auth.phoneVerified && repo.sync != null) {
       await stopSync(repo, status: _syncStatus);
-      _settings.cloudPush = null;
     }
   }
 
@@ -227,8 +263,8 @@ class _UnitLedgerAppState extends State<UnitLedgerApp>
         builder: (context, _) => MaterialApp.router(
           title: 'Rent Bee',
           debugShowCheckedModeBanner: false,
-          theme: buildTheme(Brightness.light, fontFamily: widget.fontFamily),
-          darkTheme: buildTheme(Brightness.dark, fontFamily: widget.fontFamily),
+          theme: _lightTheme,
+          darkTheme: _darkTheme,
           themeMode: _settings.appearance,
           routerConfig: _router,
         ),

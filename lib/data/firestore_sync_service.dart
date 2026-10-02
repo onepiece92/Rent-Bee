@@ -1,27 +1,37 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../state/sync_status.dart';
 import 'database.dart';
 import 'ledger_repository.dart';
+import 'sync_types.dart';
 
 /// Live mirror of the local drift ledger into Cloud Firestore, scoped per owner
 /// at `users/{uid}/`. Drift stays the source of truth for the UI; this service
-/// (a) **pushes** every local mutation up (fire-and-forget — see
-/// [LedgerRepository]'s write-through calls) and (b) **applies** remote changes
-/// back down into drift via the repository's drift-only `applyRemote*` methods.
+/// (a) **pushes** every local change up and (b) **applies** remote changes
+/// back down into drift through [LedgerRepository.applyRemote].
 ///
-/// Echo loops are impossible by construction: the apply path never pushes, and
-/// listeners additionally skip this device's own un-acked writes
-/// (`metadata.hasPendingWrites`). Identity is the unit's stable [Unit.cloudId]
-/// (a UUID), since the local int `id` differs per device and `code` is editable.
+/// **Nothing done on this device is lost to sync.** Every local change is
+/// recorded in a local outbox (`PendingPushes`) before its push is fired, and
+/// cleared only when the cloud acknowledges it. At sync start the outbox is
+/// pushed first, and no pull or listener ever overwrites or deletes a row
+/// whose key is still pending. A push sends the *current* local row for a
+/// key, so pushes are idempotent and safe to repeat.
 ///
-/// "Online required is fine" (the chosen model): Firestore's own offline queue
-/// provides durability; we do not engineer a separate offline-merge layer.
+/// **Echo loops are impossible by construction**: the apply path never pushes,
+/// listeners skip this device's own un-acked writes
+/// (`metadata.hasPendingWrites`), and applying a row that already matches is
+/// a no-op that doesn't even refresh the UI. Identity is the unit's stable
+/// [Unit.cloudId] (a UUID), since the local int `id` differs per device and
+/// `code` is editable.
+///
+/// Firestore's own offline queue provides durability for a push that was
+/// fired while offline; the outbox covers everything it can't see — changes
+/// made while this service wasn't attached at all.
 class FirestoreSyncService {
   final String uid;
   final LedgerRepository repo;
@@ -64,85 +74,125 @@ class FirestoreSyncService {
       '${unitCloudId}_${year}_$month';
 
   final List<StreamSubscription<dynamic>> _subs = [];
+  bool _detached = false;
+
+  // Listener snapshots are applied strictly one after another. Each handler is
+  // async (it awaits the database), and two of them interleaving could apply
+  // a stale change after a newer one.
+  Future<void> _serial = Future<void>.value();
 
   // Child docs (payments/charges) that arrived before their unit — buffered by
-  // unit cloudId and drained once the unit lands locally (see [_drain]).
-  final Map<String, List<_PendingChild>> _pendingChildren = {};
+  // unit cloudId and applied once the unit lands locally (see [_drain]).
+  final Map<String, List<RemotePayment>> _waitingPayments = {};
+  final Map<String, List<RemoteCharge>> _waitingCharges = {};
 
-  // Coalesce the flurry of refresh()es a multi-doc snapshot (or a demo/import
-  // storm) would otherwise trigger into a single trailing UI refresh.
+  // Coalesce the flurry of refresh()es a multi-doc snapshot would otherwise
+  // trigger into a single trailing UI refresh.
   Timer? _refreshDebounce;
   VoidCallback? _onApply;
 
   // =========================================================================
-  // Push (called from the repository after each local write; fire-and-forget)
+  // Push — called by the repository after each local change (fire-and-forget)
   // =========================================================================
 
-  void upsertUnit(Unit u) {
-    final cloudId = u.cloudId;
-    if (cloudId == null) return;
-    _fire(() => _units.doc(cloudId).set(_unitToMap(u)));
+  /// Pushes the current local state of [keys] and, once the cloud acknowledges
+  /// it, clears their outbox rows (those no newer than [seq]).
+  void push(List<SyncKey> keys, int seq) {
+    if (_detached || keys.isEmpty) return;
+    _fire(() => _push(keys, seq));
   }
 
-  void upsertUnits(List<Unit> us) {
-    _fire(() => _commitChunked([
-          for (final u in us)
-            if (u.cloudId != null) _Op.set(_units.doc(u.cloudId), _unitToMap(u)),
-        ]));
+  Future<void> _push(List<SyncKey> keys, int seq) async {
+    if (keys.any((k) => k.isAll)) {
+      await _replaceAll();
+      await repo.clearAllPending(seq);
+      return;
+    }
+    final ops = <_Op>[];
+    for (final k in keys) {
+      ops.addAll(await _opsFor(k));
+    }
+    await _commitChunked(ops);
+    await repo.clearPending(keys, seq);
   }
 
-  /// Firestore has no cascade — delete the unit's payment/charge docs too.
-  void deleteUnit(String cloudId) {
-    _fire(() async {
-      final ops = <_Op>[_Op.delete(_units.doc(cloudId))];
-      for (final col in [_payments, _charges]) {
-        final kids =
-            await col.where('unitCloudId', isEqualTo: cloudId).get();
-        ops.addAll(kids.docs.map((d) => _Op.delete(d.reference)));
+  /// The write(s) that bring the cloud in line with the local state of [k]:
+  /// a `set` if the row exists locally, a `delete` if it doesn't.
+  Future<List<_Op>> _opsFor(SyncKey k) async {
+    switch (k.kind) {
+      case SyncKey.kUnit:
+        final u = await repo.unitByCloudId(k.cloudId);
+        if (u != null) return [_Op.set(_units.doc(k.cloudId), _unitToMap(u))];
+        // Gone locally. Firestore has no cascade — delete its children too.
+        final ops = <_Op>[_Op.delete(_units.doc(k.cloudId))];
+        for (final col in [_payments, _charges]) {
+          final kids =
+              await col.where('unitCloudId', isEqualTo: k.cloudId).get();
+          ops.addAll(kids.docs.map((d) => _Op.delete(d.reference)));
+        }
+        return ops;
+      case SyncKey.kPayment:
+        final ref = _payments.doc(_childId(k.cloudId, k.year, k.month));
+        final p = await repo.paymentByKey(k);
+        return [
+          p != null ? _Op.set(ref, _paymentToMap(p, k.cloudId)) : _Op.delete(ref)
+        ];
+      case SyncKey.kCharge:
+        final ref = _charges.doc(_childId(k.cloudId, k.year, k.month));
+        final c = await repo.chargeByKey(k);
+        // Merge rather than replace, so a build that doesn't know a newer
+        // field can't strip it from the doc when it saves the ones it knows.
+        return [
+          c != null
+              ? _Op.set(ref, _chargeToMap(c, k.cloudId), merge: true)
+              : _Op.delete(ref)
+        ];
+    }
+    return const [];
+  }
+
+  /// Makes the cloud copy equal to this device's ledger: writes every local
+  /// row, then deletes the cloud documents that have no local counterpart.
+  ///
+  /// Deliberately **not** erase-then-write. Deleting first made this device's
+  /// own listeners see its units "removed" and wipe the local ledger — and if
+  /// the rewrite then failed or the app was offline, the data was simply gone
+  /// (buglog B04). Here the only documents deleted are ones that already don't
+  /// exist locally, so their echo has nothing to remove.
+  Future<void> _replaceAll() async {
+    final units = await repo.allUnits();
+    final payments = await repo.allPayments();
+    final charges = await repo.allCharges();
+    final cloudIdByUnitId = {
+      for (final u in units)
+        if (u.cloudId != null) u.id: u.cloudId!,
+    };
+    final ops = <_Op>[
+      for (final u in units)
+        if (u.cloudId != null) _Op.set(_units.doc(u.cloudId), _unitToMap(u)),
+      for (final p in payments)
+        if (cloudIdByUnitId[p.unitId] != null)
+          _Op.set(
+              _payments
+                  .doc(_childId(cloudIdByUnitId[p.unitId]!, p.year, p.month)),
+              _paymentToMap(p, cloudIdByUnitId[p.unitId]!)),
+      for (final c in charges)
+        if (cloudIdByUnitId[c.unitId] != null)
+          _Op.set(
+              _charges
+                  .doc(_childId(cloudIdByUnitId[c.unitId]!, c.year, c.month)),
+              _chargeToMap(c, cloudIdByUnitId[c.unitId]!)),
+    ];
+    final keep = {for (final op in ops) op.ref.path};
+    final (u, p, c) =
+        await (_units.get(), _payments.get(), _charges.get()).wait;
+    for (final snap in [u, p, c]) {
+      for (final d in snap.docs) {
+        if (!keep.contains(d.reference.path)) ops.add(_Op.delete(d.reference));
       }
-      await _commitChunked(ops);
-    });
+    }
+    await _commitChunked(ops);
   }
-
-  void upsertPayment(Payment p, String unitCloudId) {
-    _fire(() => _payments
-        .doc(_childId(unitCloudId, p.year, p.month))
-        .set(_paymentToMap(p, unitCloudId)));
-  }
-
-  void deletePayment(String unitCloudId, int year, int month) {
-    _fire(() => _payments.doc(_childId(unitCloudId, year, month)).delete());
-  }
-
-  /// Merge rather than replace, so a build that doesn't know a newer field
-  /// can't strip it from the doc when it saves the fields it does know.
-  void upsertCharge(Charge c, String unitCloudId) {
-    _fire(() => _charges
-        .doc(_childId(unitCloudId, c.year, c.month))
-        .set(_chargeToMap(c, unitCloudId), SetOptions(merge: true)));
-  }
-
-  void deleteCharge(String unitCloudId, int year, int month) {
-    _fire(() => _charges.doc(_childId(unitCloudId, year, month)).delete());
-  }
-
-  /// Sequenced erase-then-write for demo-data/import: clears the cloud copy,
-  /// THEN writes the new dataset, so the erase can't race ahead and delete the
-  /// freshly-written docs.
-  void replaceAllCloud({
-    required List<Unit> units,
-    required List<Payment> payments,
-    required List<Charge> charges,
-    required Map<int, String> cloudIdByUnitId,
-  }) {
-    _fire(() async {
-      await _eraseAll();
-      await _commitChunked(_bulkOps(units, payments, charges, cloudIdByUnitId));
-    });
-  }
-
-  /// Delete every unit/payment/charge doc for this owner (mirrors eraseAll).
-  void eraseAllCloud() => _fire(_eraseAll);
 
   // ---- Owner settings (root user doc, alongside the ledger subcollections) --
 
@@ -150,6 +200,7 @@ class FirestoreSyncService {
   /// and annual escalation rate so they follow the login to other devices.
   /// The PIN stays device-local.
   void pushSettings(String calendarMode, double rate, String currency) {
+    if (_detached) return;
     _fire(() => _root.set(
           {
             'calendarMode': calendarMode,
@@ -167,42 +218,16 @@ class FirestoreSyncService {
     return snap.data();
   }
 
-  List<_Op> _bulkOps(List<Unit> units, List<Payment> payments,
-      List<Charge> charges, Map<int, String> cloudIdByUnitId) {
-    return [
-      for (final u in units)
-        if (u.cloudId != null) _Op.set(_units.doc(u.cloudId), _unitToMap(u)),
-      for (final p in payments)
-        if (cloudIdByUnitId[p.unitId] != null)
-          _Op.set(
-              _payments.doc(_childId(cloudIdByUnitId[p.unitId]!, p.year, p.month)),
-              _paymentToMap(p, cloudIdByUnitId[p.unitId]!)),
-      for (final c in charges)
-        if (cloudIdByUnitId[c.unitId] != null)
-          _Op.set(
-              _charges.doc(_childId(cloudIdByUnitId[c.unitId]!, c.year, c.month)),
-              _chargeToMap(c, cloudIdByUnitId[c.unitId]!)),
-    ];
-  }
-
-  Future<void> _eraseAll() async {
-    for (final col in [_units, _payments, _charges]) {
-      final snap = await col.get();
-      await _commitChunked(
-          snap.docs.map((d) => _Op.delete(d.reference)).toList());
-    }
-  }
-
   // =========================================================================
-  // Reconcile (one-shot at sign-in) — see plan's Case A / Case B rules.
+  // Reconcile (one-shot at sync start)
   // =========================================================================
 
   Future<void> reconcile() async {
     status?.setSyncing();
     try {
       await _reconcile();
-      // Pending pushes queued by _reconcile (first-sync uploads) settle via
-      // _fire; if none were queued, mark synced now.
+      // Pushes queued by _reconcile settle via _fire; if none were queued,
+      // mark synced now.
       if (_pending == 0) status?.setSynced();
     } catch (e) {
       debugPrint('Sync: reconcile failed: $e');
@@ -215,84 +240,72 @@ class FirestoreSyncService {
     if (owner != null && owner != uid) {
       // A different owner signed in on this device. The local ledger is the
       // previous owner's — never push it into this uid's cloud (data-bleed
-      // guard). Treat as a fresh device: wipe local, pull this owner's cloud.
+      // guard). Treat as a fresh device: wipe local (and its outbox), pull
+      // this owner's cloud.
       debugPrint('Sync: owner changed ($owner → $uid); wiping local cache.');
       await repo.eraseAllLocal();
-      await _pullAll();
+      await _pull(deleteMissing: false);
       await prefs.setString(_kOwnerUid, uid);
       await prefs.setBool('$_kSyncedOnce::$uid', true);
       return;
     }
 
     final syncedOnce = prefs.getBool('$_kSyncedOnce::$uid') ?? false;
-    final cloudUnitIds = await _pullAll(); // pull cloud → drift first
 
-    // Local rows absent from cloud: push them (first sync) or delete them
-    // (already synced once → they were removed on another device).
-    final localUnits = await repo.allUnits();
-    final localPayments = await repo.allPayments();
-    final localCharges = await repo.allCharges();
-    final cloudIdByUnitId = {
-      for (final u in localUnits)
-        if (u.cloudId != null) u.id: u.cloudId!,
-    };
+    // 1. The outbox goes up first: whatever was changed here and never
+    //    acknowledged (a change made before sync finished starting, in a
+    //    session where it couldn't start, or whose push failed). Fired, not
+    //    awaited — offline, an acknowledgement never comes — and the pull
+    //    below leaves every pending key alone either way.
+    final pending = await repo.pendingPushes();
+    if (pending.isNotEmpty) {
+      push(
+        [for (final p in pending) SyncKey.fromRow(p)],
+        pending.map((p) => p.seq).reduce(math.max),
+      );
+    }
 
-    final cloudPayIds = (await _payments.get()).docs.map((d) => d.id).toSet();
-    final cloudChargeIds = (await _charges.get()).docs.map((d) => d.id).toSet();
-
-    for (final u in localUnits) {
-      final cid = u.cloudId;
-      if (cid == null) continue;
-      if (cloudUnitIds.contains(cid)) continue;
-      if (syncedOnce) {
-        await repo.deleteLocalUnitByCloudId(cid); // deleted elsewhere
-      } else {
-        upsertUnit(u); // first sync: push local-only up
-      }
-    }
-    for (final p in localPayments) {
-      final cid = cloudIdByUnitId[p.unitId];
-      if (cid == null) continue;
-      final id = _childId(cid, p.year, p.month);
-      if (cloudPayIds.contains(id)) continue;
-      if (syncedOnce) {
-        await repo.deleteLocalPayment(p.unitId, p.year, p.month);
-      } else {
-        upsertPayment(p, cid);
-      }
-    }
-    for (final c in localCharges) {
-      final cid = cloudIdByUnitId[c.unitId];
-      if (cid == null) continue;
-      final id = _childId(cid, c.year, c.month);
-      if (cloudChargeIds.contains(id)) continue;
-      if (syncedOnce) {
-        await repo.deleteLocalCharge(c.unitId, c.year, c.month);
-      } else {
-        upsertCharge(c, cid);
-      }
-    }
+    // 2. Pull. After the first sync, a local row the cloud doesn't have was
+    //    removed on another device; before it, the row exists only here and
+    //    is pushed up.
+    final fromServer = await _pull(deleteMissing: syncedOnce);
 
     await prefs.setString(_kOwnerUid, uid);
-    await prefs.setBool('$_kSyncedOnce::$uid', true);
+    // "Synced once" licenses deleting local rows the cloud lacks, so it is
+    // only earned by a pull that really saw the server's state.
+    if (fromServer) await prefs.setBool('$_kSyncedOnce::$uid', true);
   }
 
-  /// Pulls all cloud docs into drift (units before children so FK lookups
-  /// resolve). Returns the set of cloud unit ids seen.
-  Future<Set<String>> _pullAll() async {
-    final unitDocs = await _units.get();
-    for (final d in unitDocs.docs) {
-      await repo.applyRemoteUnit(_unitFromDoc(d.id, d.data()));
-    }
-    final payDocs = await _payments.get();
-    for (final d in payDocs.docs) {
-      await _applyPaymentDoc(d.data());
-    }
-    final chargeDocs = await _charges.get();
-    for (final d in chargeDocs.docs) {
-      await _applyChargeDoc(d.data());
-    }
-    return unitDocs.docs.map((d) => d.id).toSet();
+  /// Reads each collection once (in parallel) and applies the differences in a
+  /// single local transaction. Returns whether the data came from the server.
+  ///
+  /// A cache-only read (offline) is applied as updates only: it is not proof
+  /// of what the cloud holds, so nothing is deleted and nothing is taken to be
+  /// "only on this device".
+  Future<bool> _pull({required bool deleteMissing}) async {
+    final (u, p, c) =
+        await (_units.get(), _payments.get(), _charges.get()).wait;
+    final fromServer = !(u.metadata.isFromCache ||
+        p.metadata.isFromCache ||
+        c.metadata.isFromCache);
+    final res = await repo.applyRemote(
+      units: [
+        for (final d in u.docs)
+          ?_unitFrom(d.id, d.data()),
+      ],
+      payments: [
+        for (final d in p.docs)
+          ?_paymentFrom(d.id, d.data()),
+      ],
+      charges: [
+        for (final d in c.docs)
+          ?_chargeFrom(d.id, d.data()),
+      ],
+      fullSnapshot: fromServer,
+      deleteMissing: deleteMissing && fromServer,
+    );
+    if (res.toPush.isNotEmpty) await repo.queueKeys(res.toPush);
+    return fromServer;
   }
 
   // =========================================================================
@@ -300,11 +313,40 @@ class FirestoreSyncService {
   // =========================================================================
 
   void attachListeners(VoidCallback onApply) {
+    if (_detached) return; // signed out while sync was still starting
     _onApply = onApply;
-    _subs.add(_units.snapshots().listen((s) => _onUnitsSnapshot(s)));
-    _subs.add(_payments.snapshots().listen((s) => _onChildSnapshot(s, isPayment: true)));
-    _subs.add(_charges.snapshots().listen((s) => _onChildSnapshot(s, isPayment: false)));
-    _subs.add(_root.snapshots().listen(_onRootSnapshot));
+    _subs.add(_units.snapshots().listen(
+        (s) => _enqueue(() => _onUnitsSnapshot(s)),
+        onError: _onStreamError));
+    _subs.add(_payments.snapshots().listen(
+        (s) => _enqueue(() => _onChildSnapshot(s, isPayment: true)),
+        onError: _onStreamError));
+    _subs.add(_charges.snapshots().listen(
+        (s) => _enqueue(() => _onChildSnapshot(s, isPayment: false)),
+        onError: _onStreamError));
+    _subs.add(_root.snapshots().listen(_onRootSnapshot, onError: _onStreamError));
+  }
+
+  /// Runs [job] after every earlier listener job has finished; a failure is
+  /// reported and does not stop the ones behind it.
+  void _enqueue(Future<void> Function() job) {
+    _serial = _serial.then((_) async {
+      if (_detached) return;
+      try {
+        await job();
+      } catch (e) {
+        debugPrint('Sync: applying a remote change failed: $e');
+        status?.setError('$e');
+      }
+    });
+  }
+
+  /// A listener died (permission denied, account signed out elsewhere, …).
+  /// Without this the stream would end silently with the badge still saying
+  /// "synced".
+  void _onStreamError(Object e) {
+    debugPrint('Sync: listener error: $e');
+    status?.setError('$e');
   }
 
   /// Owner settings doc changed elsewhere — apply calendar mode + rate locally.
@@ -320,100 +362,73 @@ class FirestoreSyncService {
   }
 
   Future<void> _onUnitsSnapshot(QuerySnapshot<Map<String, dynamic>> snap) async {
+    final upserts = <RemoteUnit>[];
+    final removed = <String>[];
     for (final change in snap.docChanges) {
       if (change.doc.metadata.hasPendingWrites) continue; // our own echo
-      final cloudId = change.doc.id;
       if (change.type == DocumentChangeType.removed) {
-        await repo.deleteLocalUnitByCloudId(cloudId);
-      } else {
-        await repo.applyRemoteUnit(_unitFromDoc(cloudId, change.doc.data()!));
-        await _drain(cloudId); // children that arrived early can now resolve
+        removed.add(change.doc.id);
+      } else if (_unitFrom(change.doc.id, change.doc.data()) case final r?) {
+        upserts.add(r);
       }
     }
-    _scheduleRefresh();
+    if (upserts.isEmpty && removed.isEmpty) return;
+    final res = await repo.applyRemote(units: upserts, removedUnits: removed);
+    if (res.toPush.isNotEmpty) await repo.queueKeys(res.toPush);
+    // Children that arrived before these units can now resolve.
+    final drained = await _drain(upserts.map((u) => u.cloudId));
+    // Refresh the UI only when something on screen could have changed — our
+    // own acknowledged writes come back identical and change nothing.
+    if (res.changed || drained) _scheduleRefresh();
   }
 
   Future<void> _onChildSnapshot(QuerySnapshot<Map<String, dynamic>> snap,
       {required bool isPayment}) async {
+    final payments = <RemotePayment>[];
+    final charges = <RemoteCharge>[];
+    final removed = <SyncKey>[];
     for (final change in snap.docChanges) {
       if (change.doc.metadata.hasPendingWrites) continue;
-      final data = change.doc.data()!;
-      final unitCloudId = data['unitCloudId'] as String?;
-      final year = (data['year'] as num?)?.toInt();
-      final month = (data['month'] as num?)?.toInt();
-      if (unitCloudId == null || year == null || month == null) continue;
-
+      final data = change.doc.data();
       if (change.type == DocumentChangeType.removed) {
-        final unitId = await repo.localUnitIdForCloudId(unitCloudId);
-        if (unitId == null) continue;
-        if (isPayment) {
-          await repo.deleteLocalPayment(unitId, year, month);
-        } else {
-          await repo.deleteLocalCharge(unitId, year, month);
-        }
+        final unitCloudId = data?['unitCloudId'];
+        final year = data?['year'];
+        final month = data?['month'];
+        if (unitCloudId is! String || year is! num || month is! num) continue;
+        removed.add(isPayment
+            ? SyncKey.payment(unitCloudId, year.toInt(), month.toInt())
+            : SyncKey.charge(unitCloudId, year.toInt(), month.toInt()));
+      } else if (isPayment) {
+        if (_paymentFrom(change.doc.id, data) case final r?) payments.add(r);
       } else {
-        final applied =
-            isPayment ? await _applyPaymentDoc(data) : await _applyChargeDoc(data);
-        if (!applied) {
-          // Unit not local yet — buffer until its unit doc arrives.
-          (_pendingChildren[unitCloudId] ??= []).add(_PendingChild(isPayment, data));
-        }
+        if (_chargeFrom(change.doc.id, data) case final r?) charges.add(r);
       }
     }
-    _scheduleRefresh();
-  }
-
-  /// Applies any buffered children for [unitCloudId] now that its unit exists.
-  Future<void> _drain(String unitCloudId) async {
-    final pending = _pendingChildren.remove(unitCloudId);
-    if (pending == null) return;
-    for (final c in pending) {
-      if (c.isPayment) {
-        await _applyPaymentDoc(c.data);
-      } else {
-        await _applyChargeDoc(c.data);
-      }
+    if (payments.isEmpty && charges.isEmpty && removed.isEmpty) return;
+    final res = await repo.applyRemote(
+        payments: payments, charges: charges, removedChildren: removed);
+    // Unit not local yet — hold these until its unit doc arrives.
+    for (final r in res.orphanPayments) {
+      (_waitingPayments[r.unitCloudId] ??= []).add(r);
     }
+    for (final r in res.orphanCharges) {
+      (_waitingCharges[r.unitCloudId] ??= []).add(r);
+    }
+    if (res.changed) _scheduleRefresh();
   }
 
-  /// Returns false when the referenced unit isn't local yet (caller buffers).
-  Future<bool> _applyPaymentDoc(Map<String, dynamic> data) async {
-    final unitId = await repo.localUnitIdForCloudId(data['unitCloudId'] as String);
-    if (unitId == null) return false;
-    await repo.applyRemotePayment(PaymentsCompanion.insert(
-      unitId: unitId,
-      year: (data['year'] as num).toInt(),
-      month: (data['month'] as num).toInt(),
-      amount: (data['amount'] as num).toInt(),
-      paidOn: Value(_toDate(data['paidOn'])),
-      method: Value(_method(data['method'] as String?)),
-      note: Value(data['note'] as String?),
-    ));
-    return true;
-  }
-
-  Future<bool> _applyChargeDoc(Map<String, dynamic> data) async {
-    final unitId = await repo.localUnitIdForCloudId(data['unitCloudId'] as String);
-    if (unitId == null) return false;
-    await repo.applyRemoteCharge(ChargesCompanion.insert(
-      unitId: unitId,
-      year: (data['year'] as num).toInt(),
-      month: (data['month'] as num).toInt(),
-      electricity: Value((data['electricity'] as num?)?.toInt() ?? 0),
-      water: Value((data['water'] as num?)?.toInt() ?? 0),
-      service: Value((data['service'] as num?)?.toInt() ?? 0),
-      // A doc saved by a build that predates the deduction has no such keys:
-      // keep whatever this device has recorded instead of zeroing it (an
-      // absent column is left untouched by the upsert; a new row defaults to
-      // none).
-      deduction: data.containsKey('deduction')
-          ? Value((data['deduction'] as num?)?.toInt() ?? 0)
-          : const Value.absent(),
-      deductionNote: data.containsKey('deductionNote')
-          ? Value(data['deductionNote'] as String?)
-          : const Value.absent(),
-    ));
-    return true;
+  /// Applies any buffered children for [unitCloudIds] now that the units
+  /// exist. Returns whether anything changed locally.
+  Future<bool> _drain(Iterable<String> unitCloudIds) async {
+    final payments = <RemotePayment>[];
+    final charges = <RemoteCharge>[];
+    for (final id in unitCloudIds) {
+      payments.addAll(_waitingPayments.remove(id) ?? const []);
+      charges.addAll(_waitingCharges.remove(id) ?? const []);
+    }
+    if (payments.isEmpty && charges.isEmpty) return false;
+    final res = await repo.applyRemote(payments: payments, charges: charges);
+    return res.changed;
   }
 
   void _scheduleRefresh() {
@@ -423,18 +438,24 @@ class FirestoreSyncService {
   }
 
   Future<void> detach() async {
+    _detached = true;
     for (final s in _subs) {
       await s.cancel();
     }
     _subs.clear();
     _refreshDebounce?.cancel();
-    _pendingChildren.clear();
+    _waitingPayments.clear();
+    _waitingCharges.clear();
     _onApply = null;
   }
 
   // =========================================================================
   // Serialization
   // =========================================================================
+  //
+  // Parsing is defensive: a single malformed document (a hand-edited doc, a
+  // field of the wrong type) is skipped and logged, never thrown — one bad
+  // doc used to abort the whole pull, on every launch.
 
   Map<String, dynamic> _unitToMap(Unit u) => {
         'cloudId': u.cloudId,
@@ -454,23 +475,37 @@ class FirestoreSyncService {
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
-  UnitsCompanion _unitFromDoc(String cloudId, Map<String, dynamic> d) =>
-      UnitsCompanion.insert(
-        cloudId: Value(cloudId),
-        code: d['code'] as String,
-        tenantName: d['tenantName'] as String? ?? '',
+  RemoteUnit? _unitFrom(String cloudId, Map<String, dynamic>? d) {
+    try {
+      if (d == null) return null;
+      final code = (d['code'] as String).trim();
+      if (code.isEmpty || code.length > 32) {
+        throw FormatException('unit code "$code" is empty or too long');
+      }
+      var tenant = (d['tenantName'] as String? ?? '').trim();
+      if (tenant.isEmpty) tenant = '—'; // the column requires a name
+      if (tenant.length > 120) tenant = tenant.substring(0, 120);
+      return RemoteUnit(
+        cloudId: cloudId,
+        code: code,
+        tenantName: tenant,
+        businessType: d['businessType'] as String? ?? '',
         monthlyRent: (d['monthlyRent'] as num?)?.toInt() ?? 0,
-        businessType: Value(d['businessType'] as String? ?? ''),
-        phone: Value(d['phone'] as String?),
-        notes: Value(d['notes'] as String?),
-        isActive: Value(d['isActive'] as bool? ?? true),
-        createdAt: Value(_toDate(d['createdAt']) ?? DateTime.now()),
-        startedOn: Value(_toDate(d['startedOn'])),
-        lastRaisedOn: Value(_toDate(d['lastRaisedOn'])),
-        depositAmount: Value((d['depositAmount'] as num?)?.toInt() ?? 0),
-        depositRefunded: Value(d['depositRefunded'] as bool? ?? false),
-        depositRefundedOn: Value(_toDate(d['depositRefundedOn'])),
+        phone: d['phone'] as String?,
+        notes: d['notes'] as String?,
+        isActive: d['isActive'] as bool? ?? true,
+        createdAt: _toDate(d['createdAt']) ?? DateTime.now(),
+        startedOn: _toDate(d['startedOn']),
+        lastRaisedOn: _toDate(d['lastRaisedOn']),
+        depositAmount: (d['depositAmount'] as num?)?.toInt() ?? 0,
+        depositRefunded: d['depositRefunded'] as bool? ?? false,
+        depositRefundedOn: _toDate(d['depositRefundedOn']),
       );
+    } catch (e) {
+      debugPrint('Sync: skipping malformed unit doc $cloudId: $e');
+      return null;
+    }
+  }
 
   Map<String, dynamic> _paymentToMap(Payment p, String unitCloudId) => {
         'unitCloudId': unitCloudId,
@@ -480,9 +515,30 @@ class FirestoreSyncService {
         'paidOn': _ts(p.paidOn),
         'method': p.method.name,
         'note': p.note,
+        'rentAtPayment': p.rentAtPayment,
         'createdAt': Timestamp.fromDate(p.createdAt),
         'updatedAt': FieldValue.serverTimestamp(),
       };
+
+  RemotePayment? _paymentFrom(String docId, Map<String, dynamic>? d) {
+    try {
+      if (d == null) return null;
+      return RemotePayment(
+        unitCloudId: d['unitCloudId'] as String,
+        year: (d['year'] as num).toInt(),
+        month: (d['month'] as num).toInt(),
+        amount: (d['amount'] as num).toInt(),
+        paidOn: _toDate(d['paidOn']),
+        method: _method(d['method'] as String?),
+        note: d['note'] as String?,
+        hasRent: d.containsKey('rentAtPayment'),
+        rentAtPayment: (d['rentAtPayment'] as num?)?.toInt(),
+      );
+    } catch (e) {
+      debugPrint('Sync: skipping malformed payment doc $docId: $e');
+      return null;
+    }
+  }
 
   Map<String, dynamic> _chargeToMap(Charge c, String unitCloudId) => {
         'unitCloudId': unitCloudId,
@@ -496,6 +552,31 @@ class FirestoreSyncService {
         'createdAt': Timestamp.fromDate(c.createdAt),
         'updatedAt': FieldValue.serverTimestamp(),
       };
+
+  RemoteCharge? _chargeFrom(String docId, Map<String, dynamic>? d) {
+    try {
+      if (d == null) return null;
+      // A doc saved by a build that predates the deduction has no such keys:
+      // "absent" must leave this device's value alone, not zero it.
+      final hasDeduction = d.containsKey('deduction');
+      final hasNote = d.containsKey('deductionNote');
+      return RemoteCharge(
+        unitCloudId: d['unitCloudId'] as String,
+        year: (d['year'] as num).toInt(),
+        month: (d['month'] as num).toInt(),
+        electricity: (d['electricity'] as num?)?.toInt() ?? 0,
+        water: (d['water'] as num?)?.toInt() ?? 0,
+        service: (d['service'] as num?)?.toInt() ?? 0,
+        hasDeduction: hasDeduction,
+        deduction: (d['deduction'] as num?)?.toInt() ?? 0,
+        hasDeductionNote: hasNote,
+        deductionNote: d['deductionNote'] as String?,
+      );
+    } catch (e) {
+      debugPrint('Sync: skipping malformed charge doc $docId: $e');
+      return null;
+    }
+  }
 
   static Timestamp? _ts(DateTime? d) => d == null ? null : Timestamp.fromDate(d);
   static DateTime? _toDate(Object? v) =>
@@ -514,7 +595,8 @@ class FirestoreSyncService {
   /// Runs a push best-effort: never awaited by callers, errors only logged, so
   /// a Firestore hiccup can't break a local drift write. Drives the UI sync
   /// indicator: `syncing` while any push is in flight, then `synced` once the
-  /// last one acks, or `error` if it fails (e.g. offline).
+  /// last one acks, or `error` if it fails. A failed push leaves its keys in
+  /// the outbox, so it is retried at the next sync start.
   void _fire(Future<void> Function() op) {
     _pending++;
     status?.setSyncing();
@@ -533,10 +615,13 @@ class FirestoreSyncService {
     for (var i = 0; i < ops.length; i += _maxBatch) {
       final batch = _fs.batch();
       for (final op in ops.skip(i).take(_maxBatch)) {
-        if (op.data == null) {
+        final data = op.data;
+        if (data == null) {
           batch.delete(op.ref);
+        } else if (op.merge) {
+          batch.set(op.ref, data, SetOptions(merge: true));
         } else {
-          batch.set(op.ref, op.data!);
+          batch.set(op.ref, data);
         }
       }
       await batch.commit();
@@ -544,17 +629,14 @@ class FirestoreSyncService {
   }
 }
 
-/// A buffered payment/charge doc awaiting its unit (see [_pendingChildren]).
-class _PendingChild {
-  final bool isPayment;
-  final Map<String, dynamic> data;
-  _PendingChild(this.isPayment, this.data);
-}
-
-/// A pending batch operation: [data] == null means delete, else set.
+/// A pending batch operation: [data] == null means delete, else set (merged
+/// into the existing doc when [merge]).
 class _Op {
   final DocumentReference<Map<String, dynamic>> ref;
   final Map<String, dynamic>? data;
-  _Op.set(this.ref, Map<String, dynamic> this.data);
-  _Op.delete(this.ref) : data = null;
+  final bool merge;
+  _Op.set(this.ref, Map<String, dynamic> this.data, {this.merge = false});
+  _Op.delete(this.ref)
+      : data = null,
+        merge = false;
 }
