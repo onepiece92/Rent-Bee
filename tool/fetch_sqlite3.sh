@@ -20,6 +20,9 @@ files=(
   libsqlite3.arm64.ios.dylib
   libsqlite3.arm64.ios_sim.dylib
   libsqlite3.arm64.macos.dylib
+  # Release macOS builds are universal (arm64 + x86_64), so the x64 slice is
+  # needed too — without it the native-assets hook fails only in Release.
+  libsqlite3.x64.macos.dylib
   libsqlite3.arm64.android.so
   libsqlite3.arm.android.so
   libsqlite3.x64.android.so

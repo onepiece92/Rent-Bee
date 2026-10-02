@@ -54,9 +54,15 @@ AuthKey_*.p8
 *.keystore
 key.properties
 android/key.properties
+*service-account*.json
+play-publisher*.json
 
 # Store marketing assets & raw screenshots (not part of the app build).
 # The compositor itself is source — it pairs with test/store_screenshots_test.dart.
 store/*
 !store/compose_screenshots.py
 assets/screenshots/
+
+# Derived reading copies of the repo docs (regenerate: tool/md2pdf.py)
+/buglog.pdf
+/plan.pdf
