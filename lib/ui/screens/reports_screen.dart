@@ -371,7 +371,7 @@ class _ReportBody extends StatelessWidget {
       children: [
         _SummaryGrid(summary: summary),
         if (summary.chargesExpected > 0 || summary.deductions > 0)
-          _IncomeBreakdown(summary: summary),
+          _ChargesCard(summary: summary, scope: scope, mode: mode),
         if (liability != null)
           FutureBuilder<DepositLiability>(
             future: liability,
@@ -432,44 +432,263 @@ class _ReportBody extends StatelessWidget {
   }
 }
 
-/// What the period's Expected is made of — rent vs. utility charges vs.
-/// deductions. Only rendered when the period actually has charges or
-/// deductions, so an all-rent ledger keeps its uncluttered grid. Reads as a
-/// section footer under the summary grid.
-class _IncomeBreakdown extends StatelessWidget {
+/// Where the period's charges came from and where its deductions went: the
+/// per-type split of charges (electricity / water / other) with how many
+/// units each was billed to, the deduction audit trail (expand in place, same
+/// interaction as the deposit card's "Due back" line), and — on the single
+/// month scope — how many units have charges entered at all, since a
+/// forgotten meter reading silently understates Expected. Only rendered when
+/// the period actually has charges or deductions, so an all-rent ledger keeps
+/// its uncluttered grid.
+class _ChargesCard extends StatefulWidget {
   final PeriodSummary summary;
-  const _IncomeBreakdown({required this.summary});
+  final ReportScope scope;
+  final CalendarMode mode;
+  const _ChargesCard(
+      {required this.summary, required this.scope, required this.mode});
+
+  @override
+  State<_ChargesCard> createState() => _ChargesCardState();
+}
+
+class _ChargesCardState extends State<_ChargesCard> {
+  bool _expanded = false;
+
+  static String _units(int n) => n == 1 ? '1 unit' : '$n units';
 
   @override
   Widget build(BuildContext context) {
     final sys = Sys.of(context);
-    final s = summary;
+    final s = widget.summary;
+    final b = s.chargesBreakdown;
     final currency = context.watch<SettingsProvider>().currency;
-    final parts = [
-      'Rent ${Money.format(s.rentExpected, currency)}',
-      if (s.chargesExpected > 0)
-        '+ Charges ${Money.format(s.chargesExpected, currency)}',
-      if (s.deductions > 0)
-        '− Deductions ${Money.format(s.deductions, currency)}',
-    ];
+    // The card's headline is the net effect on Expected beyond plain rent.
+    final net = s.chargesExpected - s.deductions;
+    final netText = net < 0
+        ? '− ${Money.format(-net, currency)}'
+        : '+ ${Money.format(net, currency)}';
     return Padding(
-      padding: const EdgeInsets.fromLTRB(
-          Sys.gutter + 4, 0, Sys.gutter + 4, 16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Icon(Icons.functions, size: 14, color: sys.secondaryLabel),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              parts.join('  ·  '),
-              style: Type.footnote.colored(sys.secondaryLabel).tabular,
+      padding: const EdgeInsets.fromLTRB(Sys.gutter, 0, Sys.gutter, 12),
+      child: GroupedCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Title and net total side by side; stacked at accessibility
+            // text sizes (same arrangement as the deposit card).
+            Builder(builder: (context) {
+              final title = Row(
+                children: [
+                  Icon(Icons.functions, size: 20, color: sys.secondaryLabel),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text('Charges & deductions',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Type.title3.semibold.colored(sys.label)),
+                  ),
+                ],
+              );
+              final total = Text(netText,
+                  style: Type.title3.semibold.colored(sys.label).tabular);
+              if (TextSize.large(context)) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    title,
+                    const SizedBox(height: 4),
+                    FittedBox(fit: BoxFit.scaleDown, child: total),
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: title),
+                  const SizedBox(width: 12),
+                  TrailingValue(child: total),
+                ],
+              );
+            }),
+            const SizedBox(height: 12),
+            Well(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  if (b.electricity > 0)
+                    _ChargeLine(
+                      icon: Icons.bolt_outlined,
+                      label: 'Electricity · ${_units(b.electricityUnits)}',
+                      amount: Money.format(b.electricity, currency),
+                    ),
+                  if (b.water > 0) ...[
+                    if (b.electricity > 0) const Hairline(inset: 12),
+                    _ChargeLine(
+                      icon: Icons.water_drop_outlined,
+                      label: 'Water · ${_units(b.waterUnits)}',
+                      amount: Money.format(b.water, currency),
+                    ),
+                  ],
+                  if (b.service > 0) ...[
+                    if (b.electricity > 0 || b.water > 0)
+                      const Hairline(inset: 12),
+                    _ChargeLine(
+                      icon: Icons.receipt_long_outlined,
+                      label: 'Other · ${_units(b.serviceUnits)}',
+                      amount: Money.format(b.service, currency),
+                    ),
+                  ],
+                  if (s.deductions > 0) ...[
+                    if (b.total > 0) const Hairline(inset: 12),
+                    // Tapping the deductions line expands its entries.
+                    InkWell(
+                      onTap: () => setState(() => _expanded = !_expanded),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _ChargeLine(
+                              icon: Icons.remove_circle_outline,
+                              label: 'Deductions · '
+                                  '${_units(s.deductionEntries.length)}',
+                              amount:
+                                  '− ${Money.format(s.deductions, currency)}',
+                              warn: true,
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.only(right: 12),
+                            child: Icon(
+                              _expanded
+                                  ? Icons.expand_less
+                                  : Icons.expand_more,
+                              size: 18,
+                              color: sys.secondaryLabel,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (_expanded)
+                      for (final e in s.deductionEntries) ...[
+                        const Hairline(inset: 12),
+                        _DeductionEntryRow(entry: e, mode: widget.mode),
+                      ],
+                  ],
+                ],
+              ),
             ),
+            // On a single month, flag units whose charges are not entered yet
+            // — their Expected is rent-only until the meter reading goes in.
+            if (widget.scope == ReportScope.month && s.totalSlots > 0) ...[
+              const SizedBox(height: 10),
+              Builder(builder: (context) {
+                final complete = s.unitsWithCharges >= s.totalSlots;
+                return Text(
+                  'Charges entered for ${s.unitsWithCharges} of '
+                  '${s.totalSlots} units',
+                  style: Type.footnote.colored(
+                      complete ? sys.secondaryLabel : sys.orangeText),
+                );
+              }),
+            ],
+            const SizedBox(height: 6),
+            // The equation the summary grid's Expected comes from.
+            Text(
+              'Rent ${Money.format(s.rentExpected, currency)}'
+              '${s.chargesExpected > 0 ? '  +  ${Money.format(s.chargesExpected, currency)}' : ''}'
+              '${s.deductions > 0 ? '  −  ${Money.format(s.deductions, currency)}' : ''}'
+              '  =  ${Money.format(s.expected, currency)}',
+              style: Type.footnote.colored(sys.tertiaryLabel).tabular,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One line inside the charges card: icon, label, trailing amount.
+class _ChargeLine extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String amount;
+  final bool warn;
+  const _ChargeLine(
+      {required this.icon,
+      required this.label,
+      required this.amount,
+      this.warn = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final sys = Sys.of(context);
+    final color = warn ? sys.orangeText : sys.secondaryLabel;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      child: Row(
+        children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 6),
+          Expanded(child: Text(label, style: Type.subhead.colored(color))),
+          const SizedBox(width: 12),
+          TrailingValue(
+            child: Text(amount,
+                style: Type.subhead.semibold
+                    .colored(warn ? sys.orangeText : sys.label)
+                    .tabular),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// One expanded deduction: who, which month, what for. Tapping opens the
+/// unit's sheet, where the deduction can be edited.
+class _DeductionEntryRow extends StatelessWidget {
+  final DeductionEntry entry;
+  final CalendarMode mode;
+  const _DeductionEntryRow({required this.entry, required this.mode});
+
+  @override
+  Widget build(BuildContext context) {
+    final sys = Sys.of(context);
+    final currency = context.watch<SettingsProvider>().currency;
+    final e = entry;
+    final note = e.note?.trim();
+    return InkWell(
+      onTap: () => UnitDetailSheet.show(context, e.unit.id),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          children: [
+            CodeAvatar(code: e.unit.code, paid: false, size: 40),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(e.unit.tenantName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Type.subhead.colored(sys.label)),
+                  Text(
+                    note == null || note.isEmpty
+                        ? e.month.labelIn(mode)
+                        : '${e.month.labelIn(mode)} — $note',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Type.footnote.colored(sys.secondaryLabel),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text('− ${Money.format(e.amount, currency)}',
+                style:
+                    Type.subhead.semibold.colored(sys.orangeText).tabular),
+            const SizedBox(width: 6),
+            Icon(Icons.chevron_right, size: 20, color: sys.tertiaryLabel),
+          ],
+        ),
       ),
     );
   }

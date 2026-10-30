@@ -193,6 +193,49 @@ class PeriodDebt {
   });
 }
 
+/// Per-type split of [PeriodSummary.chargesExpected] — what electricity,
+/// water and service/other each contributed, plus how many distinct units
+/// each type was billed to across the period. Gated exactly like
+/// [PeriodSummary.chargesExpected] (post-start months only), so
+/// `total == chargesExpected` holds.
+class ChargesBreakdown {
+  final int electricity;
+  final int water;
+  final int service; // shown as "Other" in the UI
+  final int electricityUnits;
+  final int waterUnits;
+  final int serviceUnits;
+
+  const ChargesBreakdown({
+    this.electricity = 0,
+    this.water = 0,
+    this.service = 0,
+    this.electricityUnits = 0,
+    this.waterUnits = 0,
+    this.serviceUnits = 0,
+  });
+
+  int get total => electricity + water + service;
+}
+
+/// One deduction inside a period — which unit it was granted to, the month it
+/// offset, and the landlord's note of what it was for ("2 sacks rice").
+/// [amount] is capped at that month's rent + charges, matching how
+/// [PeriodSummary.deductions] counts it.
+class DeductionEntry {
+  final Unit unit;
+  final BsMonth month;
+  final int amount;
+  final String? note;
+
+  const DeductionEntry({
+    required this.unit,
+    required this.month,
+    required this.amount,
+    this.note,
+  });
+}
+
 /// Aggregated totals for a period of one or more BS months (the unifying
 /// type behind month/quarter/year reports). For a single month it carries
 /// exactly one [months] bucket and is equivalent to a [MonthSummary].
@@ -216,6 +259,18 @@ class PeriodSummary {
   final List<MonthBucket> months; // per-month breakdown, in order
   final List<PeriodDebt> outstanding; // units still owing, largest first
 
+  /// [chargesExpected] split by charge type (see [ChargesBreakdown]).
+  final ChargesBreakdown chargesBreakdown;
+
+  /// Every deduction in the period, month order — the audit trail behind
+  /// [deductions].
+  final List<DeductionEntry> deductionEntries;
+
+  /// Distinct started units with at least one charge entered in the period —
+  /// against [totalSlots] on a single-month report, this tells the landlord
+  /// whether any meter entry was forgotten.
+  final int unitsWithCharges;
+
   const PeriodSummary({
     required this.expected,
     required this.collected,
@@ -226,6 +281,9 @@ class PeriodSummary {
     required this.totalSlots,
     required this.months,
     required this.outstanding,
+    this.chargesBreakdown = const ChargesBreakdown(),
+    this.deductionEntries = const [],
+    this.unitsWithCharges = 0,
   });
 
   /// What is still owed across the period: the [outstanding] units' own

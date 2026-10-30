@@ -805,6 +805,10 @@ class LedgerRepository {
     final chargesByKey = {
       for (final c in charges) (c.unitId, c.year, c.month): _chargesTotal(c)
     };
+    // The full rows too, for the per-type breakdown and deduction notes.
+    final chargeRowByKey = {
+      for (final c in charges) (c.unitId, c.year, c.month): c
+    };
     // One schedule per unit: its BS anchors convert once for all the months.
     final schedules = {for (final s in active) s.id: RentSchedule(s, percent)};
     // Amount paid per (unit, year, month) — partial payments included — and
@@ -838,6 +842,12 @@ class LedgerRepository {
     final buckets = <MonthBucket>[];
     var totalExpected = 0;
     var rentExpected = 0, chargesExpected = 0, deductionsTotal = 0;
+    // Per-type charge intel, gated identically to chargesExpected so the
+    // breakdown's total reconciles with it exactly.
+    var elecTotal = 0, waterTotal = 0, serviceTotal = 0;
+    final elecUnits = <int>{}, waterUnits = <int>{}, serviceUnits = <int>{};
+    final unitsWithCharges = <int>{};
+    final deductionEntries = <DeductionEntry>[];
     for (final m in months) {
       var monthExpected = 0;
       var monthOutstanding = 0;
@@ -852,6 +862,30 @@ class LedgerRepository {
         rentExpected += rent;
         chargesExpected += monthCharges;
         deductionsTotal += capped < 0 ? 0 : capped;
+        final row = chargeRowByKey[(s.id, m.year, m.month)];
+        if (row != null) {
+          if (row.electricity > 0) {
+            elecTotal += row.electricity;
+            elecUnits.add(s.id);
+          }
+          if (row.water > 0) {
+            waterTotal += row.water;
+            waterUnits.add(s.id);
+          }
+          if (row.service > 0) {
+            serviceTotal += row.service;
+            serviceUnits.add(s.id);
+          }
+          if (_chargesTotal(row) > 0) unitsWithCharges.add(s.id);
+          if (capped > 0) {
+            deductionEntries.add(DeductionEntry(
+              unit: s,
+              month: m,
+              amount: capped,
+              note: row.deductionNote,
+            ));
+          }
+        }
         final due = dueFor(s, m);
         monthExpected += due;
         final paid = paidByKey[(s.id, m.year, m.month)] ?? 0;
@@ -919,6 +953,16 @@ class LedgerRepository {
       totalSlots: startedSlots,
       months: buckets,
       outstanding: outstanding,
+      chargesBreakdown: ChargesBreakdown(
+        electricity: elecTotal,
+        water: waterTotal,
+        service: serviceTotal,
+        electricityUnits: elecUnits.length,
+        waterUnits: waterUnits.length,
+        serviceUnits: serviceUnits.length,
+      ),
+      deductionEntries: deductionEntries,
+      unitsWithCharges: unitsWithCharges.length,
     );
   }
 
