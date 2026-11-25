@@ -70,6 +70,7 @@ a{color:var(--brand)}
 .lead{font-size:20px;color:var(--muted);max-width:44em}
 .cta{display:flex;flex-wrap:wrap;gap:12px;margin:24px 0}
 .btn{background:var(--brand);color:var(--brand-ink);text-decoration:none;font-weight:600;padding:13px 22px;border-radius:12px}
+.btn.wa{background:#128c4a;color:#fff}
 .btn.alt{background:transparent;color:var(--brand);border:1.5px solid var(--brand)}
 .shots{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:32px 0}
 .shots img{width:100%;height:auto;border-radius:16px;display:block}
@@ -84,10 +85,7 @@ details{background:var(--card);border:1px solid var(--line);border-radius:14px;p
 summary{font-weight:600;cursor:pointer}
 details p{margin:10px 0 0;color:var(--muted)}
 footer{color:var(--muted);font-size:15px;border-top:1px solid var(--line);margin-top:56px;padding-top:20px}
-.nepal{display:grid;grid-template-columns:220px 1fr;gap:24px;align-items:center}
-.nepal img{width:100%;height:auto;border-radius:16px;display:block}
-.nepal p{color:var(--muted)}
-@media (max-width:640px){.nepal{grid-template-columns:1fr}.nepal img{max-width:220px}.shots{grid-template-columns:1fr 1fr}.shots img:last-child{display:none}th{width:42%}}
+@media (max-width:640px){.shots{grid-template-columns:1fr 1fr}.shots img:last-child{display:none}th{width:42%}}
 </style>
 </head>
 <body>
@@ -133,15 +131,6 @@ footer{color:var(--muted);font-size:15px;border-top:1px solid var(--line);margin
     <tr><th>Made by</th><td>BrandBuilder Pvt Ltd, Nepal</td></tr>
   </table>
 
-  <h2 id="nepal">Built for Nepal too</h2>
-  <div class="nepal">
-    <img src="img/ledger-nepal.png" width="642" height="1389" loading="lazy" alt="Rent Bee ledger screen in Nepali Rupees for a Bikram Sambat month">
-    <div>
-      <p>Most rent apps assume US Dollars and the Gregorian calendar. Rent Bee also works in Nepali Rupees and by Bikram Sambat (BS) months, so a landlord (gharbeti) in Nepal can track rent (bhada) for shutters, shops, rooms and flats the way it is actually collected.</p>
-      <p>Months, reports and rent anniversaries all follow the BS calendar, and you can switch between BS and AD dates at any time in Settings.</p>
-    </div>
-  </div>
-
   <h2>Common questions</h2>
   <details><summary>Is there a rent tracker app that supports the Bikram Sambat (Nepali) calendar?</summary><p>Yes. Rent Bee tracks rent by Bikram Sambat months. Dates, monthly reports and rent anniversaries all follow the BS calendar, and you can switch to Gregorian (AD) dates in Settings.</p></details>
   <details><summary>Does Rent Bee work in US Dollars and Nepali Rupees?</summary><p>Yes. Rent Bee works in US Dollars or Nepali Rupees (Rs). It starts in Nepali Rupees in Nepal and in US Dollars everywhere else, and you can switch in Settings.</p></details>
@@ -153,7 +142,8 @@ footer{color:var(--muted);font-size:15px;border-top:1px solid var(--line);margin
   <details><summary>Who is Rent Bee for?</summary><p>Rent Bee is for small landlords who rent out apartments, rooms, shops or other units and collect rent every month, from one unit to a whole building. It is available worldwide, including the United States, and it is also built for landlords (gharbeti) in Nepal collecting rent (bhada) by the Bikram Sambat calendar.</p></details>
 
   <h2 id="support">Support</h2>
-  <p>Questions, problems or a request to delete your account: email <a href="mailto:mail@brandbuilder.com.np">mail@brandbuilder.com.np</a>. Please include the email address or phone number you signed in with.</p>
+  <p>Questions, problems or a request to delete your account: message us on WhatsApp. Please include the email address or phone number you signed in with.</p>
+  <div class="cta"><a class="btn wa" href="https://wa.me/9779802850777?text=Hi%2C%20I%20need%20help%20with%20Rent%20Bee">WhatsApp +977 9802850777</a></div>
   <p><a href="privacy/">Privacy policy</a></p>
 
   <footer>Rent Bee is made by <a href="https://brandbuilder.com.np">BrandBuilder Pvt Ltd</a>, Nepal.</footer>
