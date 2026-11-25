@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../data/database.dart';
@@ -122,25 +124,66 @@ class LedgerProvider extends ChangeNotifier {
   /// the next real load (month switch, pull to refresh).
   Future<void> refresh(
       {bool showLoading = false, bool keepOrder = false}) async {
+    // Only the latest load may land: two quick swipes start two loads, and
+    // the first one finishing last must not show the wrong month.
+    final token = ++_loadToken;
+    final month = _month;
     if (showLoading) {
       _loading = true;
       notifyListeners();
     }
     try {
-      final view = await repo.monthView(_month.year, _month.month,
+      final view = await repo.monthView(month.year, month.month,
           percent: _raisePercent());
+      if (token != _loadToken) return;
       _rows = keepOrder ? _inCurrentOrder(view.rows) : view.rows;
       if (!keepOrder) _held.clear();
       _summary = view.summary;
       _loadError = null;
       _dataRevision++;
     } catch (e) {
-      debugPrint('Ledger: loading ${_month.label} failed: $e');
+      if (token != _loadToken) return;
+      debugPrint('Ledger: loading ${month.label} failed: $e');
       _loadError = e;
     } finally {
-      _loading = false;
-      notifyListeners();
+      if (token == _loadToken) {
+        _loading = false;
+        _switching = false;
+        _spinnerTimer?.cancel();
+        notifyListeners();
+      }
     }
+  }
+
+  int _loadToken = 0;
+
+  /// True between a month switch and that month's data arriving. The
+  /// previous month's rows stay on screen meanwhile (dimmed, not tappable —
+  /// they belong to another month), instead of a spinner flashing on every
+  /// swipe. The spinner appears only if the load is slow ([_spinnerDelay]).
+  bool get switching => _switching;
+  bool _switching = false;
+  Timer? _spinnerTimer;
+  static const _spinnerDelay = Duration(milliseconds: 300);
+
+  Future<void> _switchTo(BsMonth m) {
+    _month = m;
+    _switching = true;
+    _spinnerTimer?.cancel();
+    _spinnerTimer = Timer(_spinnerDelay, () {
+      if (_switching && !_loading) {
+        _loading = true;
+        notifyListeners();
+      }
+    });
+    notifyListeners(); // the header names the new month at once
+    return refresh();
+  }
+
+  @override
+  void dispose() {
+    _spinnerTimer?.cancel();
+    super.dispose();
   }
 
   /// [fresh] rearranged to follow the order the rows are in now; units not
@@ -157,16 +200,15 @@ class LedgerProvider extends ChangeNotifier {
   }
 
   void setMonth(BsMonth m) {
-    _month = m;
-    refresh(showLoading: true);
+    if (m == _month) return;
+    _switchTo(m);
   }
 
   /// Switches to [m] and completes once that month is loaded — for callers
   /// that open something bound to the selected month right afterwards.
   Future<void> goToMonth(BsMonth m) async {
     if (m == _month) return;
-    _month = m;
-    await refresh(showLoading: true);
+    await _switchTo(m);
   }
 
   void nextMonth() => setMonth(_month.next());

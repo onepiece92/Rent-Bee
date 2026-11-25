@@ -11,6 +11,7 @@ import '../sheets/edit_unit_sheet.dart';
 import '../sheets/unit_detail_sheet.dart';
 import '../util/sms_reminder.dart';
 import '../widgets/glass.dart';
+import '../widgets/month_swipe.dart';
 import '../widgets/sponsored_carousel.dart';
 import '../widgets/sync_badge.dart';
 import '../widgets/tap_target.dart';
@@ -37,13 +38,23 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final sys = Sys.of(context);
+    final ledger = context.read<LedgerProvider>();
     return SafeArea(
       bottom: false,
-      child: RefreshIndicator(
+      // Swipe left / right anywhere on the page for the next / previous
+      // month; the page slides in from that side.
+      child: MonthSwipe(
+        onNext: ledger.nextMonth,
+        onPrevious: ledger.previousMonth,
+        child: RefreshIndicator(
         onRefresh: () => context.read<LedgerProvider>().refresh(),
         color: sys.tint,
         backgroundColor: sys.card,
-        child: CustomScrollView(
+        child: Selector<LedgerProvider, int>(
+          selector: (_, l) => l.month.year * 12 + l.month.month,
+          builder: (_, position, page) =>
+              SlideOnChange(position: position, child: page!),
+          child: CustomScrollView(
           // Stay scrollable even when content is short, so pull-to-refresh
           // works on an empty ledger.
           physics: const AlwaysScrollableScrollPhysics(),
@@ -58,9 +69,12 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             SliverToBoxAdapter(
-              child: Selector<LedgerProvider, MonthSummary>(
-                selector: (_, l) => l.summary,
-                builder: (_, summary, _) => _SummaryCard(summary: summary),
+              child: Selector<LedgerProvider, (MonthSummary, bool)>(
+                selector: (_, l) => (l.summary, l.switching),
+                builder: (_, s, _) => _Stale(
+                  stale: s.$2,
+                  child: _SummaryCard(summary: s.$1),
+                ),
               ),
             ),
             SliverToBoxAdapter(
@@ -87,15 +101,26 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   );
                 }
+                // Until the new month arrives, the previous month's rows stay
+                // up, dimmed and inert: tapping one would act on the wrong
+                // month.
+                Widget stale(Widget sliver) => SliverIgnorePointer(
+                      ignoring: ledger.switching,
+                      sliver: SliverAnimatedOpacity(
+                        opacity: ledger.switching ? _Stale.opacity : 1,
+                        duration: Motion.duration(context, Motion.quick),
+                        sliver: sliver,
+                      ),
+                    );
                 final rows = ledger.visibleRows; // read once (was O(N²) below)
                 if (rows.isEmpty) {
-                  return SliverToBoxAdapter(
+                  return stale(SliverToBoxAdapter(
                     child: _Empty(noUnits: ledger.totalCount == 0),
-                  );
+                  ));
                 }
                 // One grouped card of rows: the card colour is painted behind
                 // the lazy sliver, so a long ledger still builds on demand.
-                return SliverPadding(
+                return stale(SliverPadding(
                   padding:
                       const EdgeInsets.fromLTRB(Sys.gutter, 8, Sys.gutter, 10),
                   sliver: DecoratedSliver(
@@ -113,7 +138,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   ),
-                );
+                ));
               },
             ),
             // Sponsored carousel — outside the list, shown even when empty.
@@ -121,9 +146,30 @@ class _HomeScreenState extends State<HomeScreen> {
             const SliverToBoxAdapter(child: SizedBox(height: 120)),
           ],
         ),
+        ),
+      ),
       ),
     );
   }
+}
+
+/// The previous month's figures, shown dimmed and inert while the next
+/// month loads.
+class _Stale extends StatelessWidget {
+  static const opacity = 0.4;
+  final bool stale;
+  final Widget child;
+  const _Stale({required this.stale, required this.child});
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+        ignoring: stale,
+        child: AnimatedOpacity(
+          opacity: stale ? opacity : 1,
+          duration: Motion.duration(context, Motion.quick),
+          child: child,
+        ),
+      );
 }
 
 /// Ink shape for a row of the grouped list: the first and last rows follow the

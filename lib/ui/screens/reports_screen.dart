@@ -15,6 +15,7 @@ import '../sheets/unit_detail_sheet.dart';
 import '../util/csv_share.dart';
 import '../util/sms_reminder.dart';
 import '../widgets/glass.dart';
+import '../widgets/month_swipe.dart';
 import '../widgets/tap_target.dart';
 import '../widgets/toast.dart';
 
@@ -249,7 +250,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final mode = context.watch<SettingsProvider>().calendar;
     return SafeArea(
       bottom: false,
-      child: ListView(
+      // Swipe left / right for the next / previous period, like the Ledger.
+      child: MonthSwipe(
+        onNext: () => _step(1),
+        onPrevious: () => _step(-1),
+        child: SlideOnChange(
+        position: _anchor.year * 12 + _anchor.month,
+        child: ListView(
         padding: const EdgeInsets.only(bottom: 120), // clear the floating tab bar
         children: [
           // Large Title with the period it describes; the ‹ › period stepper
@@ -341,6 +348,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
           ),
         ],
       ),
+        ),
+      ),
     );
   }
 }
@@ -371,7 +380,8 @@ class _ReportBody extends StatelessWidget {
       children: [
         _SummaryGrid(summary: summary),
         if (summary.chargesExpected > 0 || summary.deductions > 0)
-          _ChargesCard(summary: summary, scope: scope, mode: mode),
+          _ChargesCard(
+              summary: summary, scope: scope, mode: mode, anchor: anchor),
         if (liability != null)
           FutureBuilder<DepositLiability>(
             future: liability,
@@ -427,6 +437,388 @@ class _ReportBody extends StatelessWidget {
                   ),
                 ),
         ),
+        if (isPeriod && (summary.chargesExpected > 0 || summary.deductions > 0))
+          _ChargesTrend(summary: summary, mode: mode),
+        if (summary.chargesByUnit.isNotEmpty)
+          _ChargesByUnit(
+              summary: summary,
+              anchor: isPeriod ? null : anchor,
+              showMonths: isPeriod),
+        if (summary.deductionEntries.isNotEmpty)
+          _DeductionsByUnit(
+              summary: summary, mode: mode, anchor: isPeriod ? null : anchor),
+      ],
+    );
+  }
+}
+
+/// Opens [unit]'s sheet. On a single-month report the Ledger is first moved
+/// to that month, since the sheet edits the Ledger's selected month (the B07
+/// rule); on a period report it opens on whatever month the Ledger shows.
+Future<void> _openUnit(BuildContext context, Unit unit, BsMonth? month) async {
+  if (month != null) await context.read<LedgerProvider>().goToMonth(month);
+  if (context.mounted) UnitDetailSheet.show(context, unit.id);
+}
+
+/// A compact unit line inside a report card: avatar, name, a detail line,
+/// an optional trailing value, chevron.
+class _UnitLine extends StatelessWidget {
+  final Unit unit;
+  final String subtitle;
+  final Widget? trailing;
+  final VoidCallback onTap;
+  const _UnitLine(
+      {required this.unit,
+      required this.subtitle,
+      required this.onTap,
+      this.trailing});
+
+  @override
+  Widget build(BuildContext context) {
+    final sys = Sys.of(context);
+    return InkWell(
+      onTap: onTap,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: Sys.minTapTarget),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              CodeAvatar(code: unit.code, paid: false, size: 40),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(unit.tenantName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Type.subhead.colored(sys.label)),
+                    Text(subtitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Type.footnote.colored(sys.secondaryLabel)),
+                  ],
+                ),
+              ),
+              if (trailing != null) ...[
+                const SizedBox(width: 12),
+                TrailingValue(child: trailing!),
+              ],
+              const SizedBox(width: 6),
+              Icon(Icons.chevron_right, size: 20, color: sys.tertiaryLabel),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Charges per month across a quarter or year: one bar per month (a single
+/// measure, so one colour and no legend), the amount beside it, and the
+/// month's deductions underneath when there were any — to spot a seasonal
+/// electricity bill or a month whose readings were never entered.
+class _ChargesTrend extends StatelessWidget {
+  final PeriodSummary summary;
+  final CalendarMode mode;
+  const _ChargesTrend({required this.summary, required this.mode});
+
+  @override
+  Widget build(BuildContext context) {
+    final sys = Sys.of(context);
+    final currency = context.watch<SettingsProvider>().currency;
+    final months = summary.months;
+    final peak = months.fold<int>(0, (m, b) => b.charges > m ? b.charges : m);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SectionTitle('Charges per month', padding: _sectionPad),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(Sys.gutter, 0, Sys.gutter, 12),
+          child: GroupedCard(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              children: [
+                for (var i = 0; i < months.length; i++) ...[
+                  if (i > 0) const Hairline(),
+                  Semantics(
+                    container: true,
+                    excludeSemantics: true,
+                    label: '${BsMonth(months[i].year, months[i].month).labelIn(mode)}: '
+                        'charges ${Money.format(months[i].charges, currency)}'
+                        '${months[i].deductions > 0 ? ', deductions ${Money.format(months[i].deductions, currency)}' : ''}',
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: Sys.gutter, vertical: 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              SizedBox(
+                                width: 80,
+                                child: Text(
+                                    BsMonth(months[i].year, months[i].month)
+                                        .monthNameIn(mode),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Type.subhead.colored(sys.label)),
+                              ),
+                              Expanded(
+                                child: _Bar(
+                                    value: peak == 0
+                                        ? 0
+                                        : months[i].charges / peak),
+                              ),
+                              const SizedBox(width: 12),
+                              TrailingValue(
+                                share: 0.3,
+                                child: Text(
+                                  months[i].charges == 0
+                                      ? '—'
+                                      : Money.format(
+                                          months[i].charges, currency),
+                                  style: Type.footnote
+                                      .colored(sys.secondaryLabel)
+                                      .tabular,
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (months[i].deductions > 0)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 80, top: 2),
+                              child: Text(
+                                '− ${Money.format(months[i].deductions, currency)} deducted',
+                                style: Type.caption1
+                                    .colored(sys.orangeText)
+                                    .tabular,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A plain magnitude bar on the fill track (not a progress bar: it never
+/// turns green when full).
+class _Bar extends StatelessWidget {
+  final double value;
+  const _Bar({required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final sys = Sys.of(context);
+    final v = value.clamp(0.0, 1.0).toDouble();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(Sys.radiusCapsule),
+      child: SizedBox(
+        height: 8,
+        child: DecoratedBox(
+          decoration: BoxDecoration(color: sys.fill),
+          child: FractionallySizedBox(
+            alignment: Alignment.centerLeft,
+            widthFactor: v,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: sys.tint,
+                borderRadius: BorderRadius.circular(Sys.radiusCapsule),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Each unit's charges for the period, largest first, split by type: who
+/// used the most electricity, whose water bill jumped. The top five show;
+/// the rest are one tap away.
+class _ChargesByUnit extends StatefulWidget {
+  final PeriodSummary summary;
+  final BsMonth? anchor; // set on a single-month report (see [_openUnit])
+  final bool showMonths;
+  const _ChargesByUnit(
+      {required this.summary, required this.anchor, required this.showMonths});
+
+  @override
+  State<_ChargesByUnit> createState() => _ChargesByUnitState();
+}
+
+class _ChargesByUnitState extends State<_ChargesByUnit> {
+  static const _preview = 5;
+  bool _all = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final sys = Sys.of(context);
+    final currency = context.watch<SettingsProvider>().currency;
+    final rows = widget.summary.chargesByUnit;
+    final shown = _all ? rows : rows.take(_preview).toList();
+    // Non-breaking spaces keep each "Water Rs 400" on one line when the
+    // split wraps.
+    String amt(String label, int v) =>
+        '$label ${Money.format(v, currency)}'.replaceAll(' ', '\u00A0');
+    String split(UnitCharges c) => [
+          if (c.electricity > 0) amt('Electricity', c.electricity),
+          if (c.water > 0) amt('Water', c.water),
+          if (c.service > 0) amt('Other', c.service),
+        ].join(' · ');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionTitle('Charges by unit (${rows.length})', padding: _sectionPad),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(Sys.gutter, 0, Sys.gutter, 12),
+          child: GroupedCard(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              children: [
+                for (var i = 0; i < shown.length; i++) ...[
+                  if (i > 0) const Hairline(inset: 62),
+                  _UnitLine(
+                    unit: shown[i].unit,
+                    subtitle: split(shown[i]),
+                    trailing: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(Money.format(shown[i].total, currency),
+                            style: Type.subhead.semibold
+                                .colored(sys.label)
+                                .tabular),
+                        if (widget.showMonths)
+                          Text('${shown[i].months} mo',
+                              style:
+                                  Type.footnote.colored(sys.secondaryLabel)),
+                      ],
+                    ),
+                    onTap: () =>
+                        _openUnit(context, shown[i].unit, widget.anchor),
+                  ),
+                ],
+                if (rows.length > _preview) ...[
+                  const Hairline(),
+                  InkWell(
+                    onTap: () => setState(() => _all = !_all),
+                    child: ConstrainedBox(
+                      constraints:
+                          const BoxConstraints(minHeight: Sys.minTapTarget),
+                      child: Center(
+                        child: Text(
+                            _all ? 'Show top $_preview' : 'Show all ${rows.length}',
+                            style: Type.subhead.colored(sys.tintText)),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Deductions grouped by tenant, largest total first — whose shop the
+/// landlord buys from most. Tap a tenant to see each deduction's month and
+/// note; tap an entry to open the unit.
+class _DeductionsByUnit extends StatefulWidget {
+  final PeriodSummary summary;
+  final CalendarMode mode;
+  final BsMonth? anchor;
+  const _DeductionsByUnit(
+      {required this.summary, required this.mode, required this.anchor});
+
+  @override
+  State<_DeductionsByUnit> createState() => _DeductionsByUnitState();
+}
+
+class _DeductionsByUnitState extends State<_DeductionsByUnit> {
+  final _open = <int>{};
+
+  @override
+  Widget build(BuildContext context) {
+    final sys = Sys.of(context);
+    final currency = context.watch<SettingsProvider>().currency;
+    final groups = <int, List<DeductionEntry>>{};
+    for (final e in widget.summary.deductionEntries) {
+      (groups[e.unit.id] ??= []).add(e);
+    }
+    int total(List<DeductionEntry> l) => l.fold(0, (s, e) => s + e.amount);
+    final ordered = groups.values.toList()
+      ..sort((a, b) {
+        final t = total(b).compareTo(total(a));
+        return t != 0 ? t : a.first.unit.code.compareTo(b.first.unit.code);
+      });
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionTitle('Deductions by unit (${ordered.length})',
+            padding: _sectionPad),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(Sys.gutter, 0, Sys.gutter, 12),
+          child: GroupedCard(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              children: [
+                for (var i = 0; i < ordered.length; i++) ...[
+                  if (i > 0) const Hairline(inset: 62),
+                  Builder(builder: (context) {
+                    final list = ordered[i];
+                    final unit = list.first.unit;
+                    final open = _open.contains(unit.id);
+                    final latest = list.last.note?.trim();
+                    return Column(
+                      children: [
+                        _UnitLine(
+                          unit: unit,
+                          subtitle: open
+                              ? (list.length == 1
+                                  ? '1 deduction'
+                                  : '${list.length} deductions')
+                              : [
+                                  list.length == 1
+                                      ? '1 deduction'
+                                      : '${list.length} deductions',
+                                  if (latest != null && latest.isNotEmpty)
+                                    latest,
+                                ].join(' · '),
+                          trailing: Text('− ${Money.format(total(list), currency)}',
+                              style: Type.subhead.semibold
+                                  .colored(sys.orangeText)
+                                  .tabular),
+                          onTap: () => setState(() =>
+                              open ? _open.remove(unit.id) : _open.add(unit.id)),
+                        ),
+                        if (open)
+                          for (final e in list)
+                            _DeductionEntryRow(
+                                entry: e,
+                                mode: widget.mode,
+                                compact: true,
+                                onTap: () =>
+                                    _openUnit(context, unit, widget.anchor ?? e.month)),
+                      ],
+                    );
+                  }),
+                ],
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -444,8 +836,12 @@ class _ChargesCard extends StatefulWidget {
   final PeriodSummary summary;
   final ReportScope scope;
   final CalendarMode mode;
+  final BsMonth anchor;
   const _ChargesCard(
-      {required this.summary, required this.scope, required this.mode});
+      {required this.summary,
+      required this.scope,
+      required this.mode,
+      required this.anchor});
 
   @override
   State<_ChargesCard> createState() => _ChargesCardState();
@@ -455,6 +851,7 @@ class _ChargesCardState extends State<_ChargesCard> {
   bool _expanded = false;
 
   static String _units(int n) => n == 1 ? '1 unit' : '$n units';
+  static String _entries(int n) => n == 1 ? '1 entry' : '$n entries';
 
   @override
   Widget build(BuildContext context) {
@@ -538,54 +935,94 @@ class _ChargesCardState extends State<_ChargesCard> {
                   ],
                   if (s.deductions > 0) ...[
                     if (b.total > 0) const Hairline(inset: 12),
-                    // Tapping the deductions line expands its entries.
-                    InkWell(
-                      onTap: () => setState(() => _expanded = !_expanded),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _ChargeLine(
-                              icon: Icons.remove_circle_outline,
-                              label: 'Deductions · '
-                                  '${_units(s.deductionEntries.length)}',
-                              amount:
-                                  '− ${Money.format(s.deductions, currency)}',
-                              warn: true,
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.only(right: 12),
-                            child: Icon(
-                              _expanded
-                                  ? Icons.expand_less
-                                  : Icons.expand_more,
-                              size: 18,
-                              color: sys.secondaryLabel,
-                            ),
-                          ),
-                        ],
-                      ),
+                    // Who each deduction went to is in "Deductions by unit".
+                    _ChargeLine(
+                      icon: Icons.remove_circle_outline,
+                      label: 'Deductions · '
+                          '${_entries(s.deductionEntries.length)}',
+                      amount: '− ${Money.format(s.deductions, currency)}',
+                      warn: true,
                     ),
-                    if (_expanded)
-                      for (final e in s.deductionEntries) ...[
-                        const Hairline(inset: 12),
-                        _DeductionEntryRow(entry: e, mode: widget.mode),
-                      ],
                   ],
                 ],
               ),
             ),
             // On a single month, flag units whose charges are not entered yet
             // — their Expected is rent-only until the meter reading goes in.
+            // Tap to list them, each a shortcut to enter its readings.
             if (widget.scope == ReportScope.month && s.totalSlots > 0) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 6),
               Builder(builder: (context) {
-                final complete = s.unitsWithCharges >= s.totalSlots;
-                return Text(
+                final missing = s.missingCharges;
+                final line = Text(
                   'Charges entered for ${s.unitsWithCharges} of '
                   '${s.totalSlots} units',
-                  style: Type.footnote.colored(
-                      complete ? sys.secondaryLabel : sys.orangeText),
+                  style: Type.footnote.colored(missing.isEmpty
+                      ? sys.secondaryLabel
+                      : sys.orangeText),
+                );
+                if (missing.isEmpty) {
+                  return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: line);
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    InkWell(
+                      onTap: () => setState(() => _expanded = !_expanded),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                            minHeight: Sys.minTapTarget),
+                        // A Wrap: at large text sizes the toggle drops
+                        // under the count instead of overflowing.
+                        child: Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          runSpacing: 4,
+                          children: [
+                            line,
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                      _expanded ? 'Hide' : 'Show missing',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Type.footnote
+                                          .colored(sys.tintText)),
+                                ),
+                                Icon(
+                                    _expanded
+                                        ? Icons.expand_less
+                                        : Icons.expand_more,
+                                    size: 18,
+                                    color: sys.tintText),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (_expanded)
+                      Well(
+                        padding: EdgeInsets.zero,
+                        child: Column(
+                          children: [
+                            for (var i = 0; i < missing.length; i++) ...[
+                              if (i > 0) const Hairline(inset: 62),
+                              _UnitLine(
+                                unit: missing[i],
+                                subtitle: 'No charges entered',
+                                onTap: () => _openUnit(
+                                    context, missing[i], widget.anchor),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                  ],
                 );
               }),
             ],
@@ -646,7 +1083,15 @@ class _ChargeLine extends StatelessWidget {
 class _DeductionEntryRow extends StatelessWidget {
   final DeductionEntry entry;
   final CalendarMode mode;
-  const _DeductionEntryRow({required this.entry, required this.mode});
+
+  /// Inside a tenant's group: no avatar or name, just month, note, amount.
+  final bool compact;
+  final VoidCallback? onTap;
+  const _DeductionEntryRow(
+      {required this.entry,
+      required this.mode,
+      this.compact = false,
+      this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -655,21 +1100,24 @@ class _DeductionEntryRow extends StatelessWidget {
     final e = entry;
     final note = e.note?.trim();
     return InkWell(
-      onTap: () => UnitDetailSheet.show(context, e.unit.id),
+      onTap: onTap ?? () => UnitDetailSheet.show(context, e.unit.id),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: EdgeInsets.fromLTRB(compact ? 62 : 12, 6, 12, 6),
         child: Row(
           children: [
-            CodeAvatar(code: e.unit.code, paid: false, size: 40),
-            const SizedBox(width: 10),
+            if (!compact) ...[
+              CodeAvatar(code: e.unit.code, paid: false, size: 40),
+              const SizedBox(width: 10),
+            ],
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(e.unit.tenantName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Type.subhead.colored(sys.label)),
+                  if (!compact)
+                    Text(e.unit.tenantName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Type.subhead.colored(sys.label)),
                   Text(
                     note == null || note.isEmpty
                         ? e.month.labelIn(mode)
@@ -682,9 +1130,13 @@ class _DeductionEntryRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            Text('− ${Money.format(e.amount, currency)}',
-                style:
-                    Type.subhead.semibold.colored(sys.orangeText).tabular),
+            TrailingValue(
+              child: Text('− ${Money.format(e.amount, currency)}',
+                  style: (compact ? Type.footnote : Type.subhead)
+                      .semibold
+                      .colored(sys.orangeText)
+                      .tabular),
+            ),
             const SizedBox(width: 6),
             Icon(Icons.chevron_right, size: 20, color: sys.tertiaryLabel),
           ],

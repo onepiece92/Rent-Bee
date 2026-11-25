@@ -353,6 +353,25 @@ column on payments); both upgrades are additive.
 
 ---
 
+## Improvements
+
+### I01 ✅ Swipe to change month (30 Oct 2026)
+
+- **What:** on the Ledger, swipe left for the next month and right for the previous one, as in Calendar. Reports does the same for its month / quarter / year. The page slides in from the side it came from, also when the ‹ › arrows or the today chip change the month. A light haptic tick confirms the swipe.
+- **What counts as a swipe:** a quick flick, or a slow drag past a quarter of the screen. Short or mostly vertical drags still just scroll. The sponsor strip keeps its own sideways swipe. The arrows stay as the visible, labelled control (VoiceOver).
+- **No more spinner flash:** switching months used to blank the list behind a spinner. Now the previous month's rows stay up, dimmed and not tappable (they belong to another month), until the new month arrives; a spinner appears only if that takes longer than 0.3 s. If several swipes overlap, only the last month's data is shown.
+- **Reduce Motion:** the slide is skipped; the month still changes.
+- **Tests:** `test/month_swipe_test.dart` (9 tests).
+
+### I02 ✅ More charges and deductions reports (25 Nov 2026)
+
+- **Missing meter readings (month view):** "Charges entered for 3 of 6 units" now opens a list of the units with no charges yet; tap one to enter them for that month.
+- **Charges by unit:** every unit's electricity, water and other charges for the period, largest first; top 5 shown, "Show all" for the rest. On quarter and year it also shows how many months were billed.
+- **Deductions by unit:** deductions grouped per tenant with totals and the latest note; tap a tenant to see each month and note. (The flat list that used to expand inside the "Charges & deductions" card moved here.)
+- **Charges per month (quarter and year):** one bar per month with the amount and that month's deductions, to spot a seasonal bill or a month with no readings.
+- Tapping a unit on a month report first switches the Ledger to that month, so the sheet edits the right month (same rule as B07).
+- **Tests:** `test/charges_reports_test.dart` (7 tests); `test/large_text_test.dart` still passes at 2× text.
+
 ## Earlier fixes this session (before the queue)
 
 | When | What was fixed |

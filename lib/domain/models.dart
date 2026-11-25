@@ -161,12 +161,19 @@ class MonthBucket {
   /// Per-unit shortfalls for this month, added up (see [MonthSummary.pending]).
   final int? outstanding;
 
+  /// This month's utility charges and (capped) deductions, gated like
+  /// [PeriodSummary.chargesExpected] — for the per-month trend in Reports.
+  final int charges;
+  final int deductions;
+
   const MonthBucket({
     required this.year,
     required this.month,
     required this.expected,
     required this.collected,
     this.outstanding,
+    this.charges = 0,
+    this.deductions = 0,
   });
 
   int get pending => outstanding ?? (expected - collected).clamp(0, expected);
@@ -213,6 +220,26 @@ class ChargesBreakdown {
     this.electricityUnits = 0,
     this.waterUnits = 0,
     this.serviceUnits = 0,
+  });
+
+  int get total => electricity + water + service;
+}
+
+/// One unit's utility charges across a period, by type — a row of the
+/// "Charges by unit" report.
+class UnitCharges {
+  final Unit unit;
+  final int electricity;
+  final int water;
+  final int service; // shown as "Other"
+  final int months; // months with any charge entered
+
+  const UnitCharges({
+    required this.unit,
+    this.electricity = 0,
+    this.water = 0,
+    this.service = 0,
+    this.months = 0,
   });
 
   int get total => electricity + water + service;
@@ -271,6 +298,13 @@ class PeriodSummary {
   /// whether any meter entry was forgotten.
   final int unitsWithCharges;
 
+  /// Units with charges in the period, largest total first.
+  final List<UnitCharges> chargesByUnit;
+
+  /// Active, started units with no charge entered anywhere in the period, by
+  /// code — on a month report, the meter readings still to enter.
+  final List<Unit> missingCharges;
+
   const PeriodSummary({
     required this.expected,
     required this.collected,
@@ -284,6 +318,8 @@ class PeriodSummary {
     this.chargesBreakdown = const ChargesBreakdown(),
     this.deductionEntries = const [],
     this.unitsWithCharges = 0,
+    this.chargesByUnit = const [],
+    this.missingCharges = const [],
   });
 
   /// What is still owed across the period: the [outstanding] units' own

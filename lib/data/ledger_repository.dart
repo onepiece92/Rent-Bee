@@ -848,22 +848,34 @@ class LedgerRepository {
     final elecUnits = <int>{}, waterUnits = <int>{}, serviceUnits = <int>{};
     final unitsWithCharges = <int>{};
     final deductionEntries = <DeductionEntry>[];
+    // Per unit: (electricity, water, service, months with charges).
+    final perUnit = <int, (int, int, int, int)>{};
+    final startedUnits = <int>{};
     for (final m in months) {
       var monthExpected = 0;
       var monthOutstanding = 0;
+      var monthCharges = 0, monthDeductions = 0;
       for (final s in active) {
         final schedule = schedules[s.id]!;
         if (!schedule.startedBy(m.year, m.month)) continue;
+        startedUnits.add(s.id);
         final rent = rentFor(s, m);
-        final monthCharges = chargesByKey[(s.id, m.year, m.month)] ?? 0;
+        final unitCharges = chargesByKey[(s.id, m.year, m.month)] ?? 0;
         final deduction = deductionByKey[(s.id, m.year, m.month)] ?? 0;
         final capped =
-            deduction > rent + monthCharges ? rent + monthCharges : deduction;
+            deduction > rent + unitCharges ? rent + unitCharges : deduction;
         rentExpected += rent;
-        chargesExpected += monthCharges;
+        chargesExpected += unitCharges;
         deductionsTotal += capped < 0 ? 0 : capped;
+        monthCharges += unitCharges;
+        monthDeductions += capped < 0 ? 0 : capped;
         final row = chargeRowByKey[(s.id, m.year, m.month)];
         if (row != null) {
+          if (unitCharges > 0) {
+            final (e, w, sv, n) = perUnit[s.id] ?? (0, 0, 0, 0);
+            perUnit[s.id] =
+                (e + row.electricity, w + row.water, sv + row.service, n + 1);
+          }
           if (row.electricity > 0) {
             elecTotal += row.electricity;
             elecUnits.add(s.id);
@@ -900,6 +912,8 @@ class LedgerRepository {
         expected: monthExpected,
         collected: collected,
         outstanding: monthOutstanding,
+        charges: monthCharges,
+        deductions: monthDeductions,
       ));
       totalExpected += monthExpected;
     }
@@ -963,6 +977,20 @@ class LedgerRepository {
       ),
       deductionEntries: deductionEntries,
       unitsWithCharges: unitsWithCharges.length,
+      chargesByUnit: [
+        for (final s in active)
+          if (perUnit[s.id] case (final e, final w, final sv, final n))
+            UnitCharges(
+                unit: s, electricity: e, water: w, service: sv, months: n),
+      ]..sort((a, b) {
+          final byTotal = b.total.compareTo(a.total);
+          return byTotal != 0 ? byTotal : a.unit.code.compareTo(b.unit.code);
+        }),
+      missingCharges: [
+        for (final s in active)
+          if (startedUnits.contains(s.id) && !unitsWithCharges.contains(s.id))
+            s,
+      ]..sort((a, b) => a.code.compareTo(b.code)),
     );
   }
 
