@@ -1,0 +1,14 @@
+# Brand Builder
+
+> BrandBuilder Pvt Ltd is a software and digital marketing company in Nepal. Its products include Rent Bee, a free rent tracker app for small landlords in the United States, Nepal and worldwide.
+
+## Rent Bee
+
+- [Rent Bee](https://onepiece92.github.io/Rent-Bee/): Free rent tracker and tenant ledger app for small landlords, available worldwide including the United States. Tracks monthly rent, electricity, water and other utility charges, deductions, security deposits and outstanding dues for apartments, rooms, shops and other units. Works in US Dollars or Nepali Rupees, with Gregorian (AD) or Bikram Sambat (BS) dates, so it also suits landlords (gharbeti) in Nepal tracking rent (bhada) for shutters, shops, rooms and flats. Works offline after sign-in and backs up to the user's cloud account. Sign-in uses a Google account or Sign in with Apple; Nepali (+977) mobile numbers can also sign in by SMS. It records payments received and does not collect rent online. Available for iPhone, iPad and Android.
+- [Rent Bee on the App Store](https://apps.apple.com/app/id6800732359)
+- [Rent Bee on Google Play](https://play.google.com/store/apps/details?id=com.brandbuilder.rentbee)
+- [Rent Bee privacy policy](https://onepiece92.github.io/Rent-Bee/privacy/)
+
+## Contact
+
+- Email: mail@brandbuilder.com.np
