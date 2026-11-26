@@ -258,6 +258,23 @@ void main() {
         await settle(t);
         await shot(t, device, '05_settings');
       }, skip: !enabled);
+
+      // Scrolls the current tab so [label] sits near the top of the page.
+      Future<void> scrollTo(WidgetTester t, String label) async {
+        await Scrollable.ensureVisible(t.element(find.text(label).first),
+            alignment: 0.04);
+        await settle(t);
+      }
+
+      testWidgets('06 deposits', (t) async {
+        await seed();
+        await boot(t, pixels, dpr);
+        await t.tap(find.text('Reports'));
+        await settle(t);
+        await scrollTo(t, 'Deposit liability');
+        await shot(t, device, '06_deposits');
+      }, skip: !enabled);
+
     });
   });
 }

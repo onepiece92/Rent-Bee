@@ -60,9 +60,12 @@ SHOTS = [
 
 # The US storefront set (`--market us`): same shots rendered in US Dollars
 # with AD dates, read from store/raw_us/ and written to store/listing_us/.
-SHOTS_US = SHOTS[:4] + [
-    ("05_settings", "Private and backed up",
-     "PIN lock, automatic cloud backup, export any time"),
+# Short headlines that stay legible in search-result thumbnails.
+SHOTS_US = [
+    ("01_ledger", "See who paid and who owes", "Rent, paid and pending"),
+    ("02_unit_detail", "Add utility bills to rent", "Electricity, water and more"),
+    ("03_reports", "Swipe through monthly reports", "Month, quarter or year"),
+    ("06_deposits", "Track deposits and who owes", "Deposits held, rent pending"),
 ]
 
 
