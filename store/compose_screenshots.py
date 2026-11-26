@@ -23,17 +23,19 @@ ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "store" / "raw"
 OUT = ROOT / "store" / "listing"
 
-DISPLAY = ROOT / "assets" / "fonts" / "Fraunces.ttf"
-BODY = ROOT / "assets" / "fonts" / "HankenGrotesk.ttf"
+# The app uses the system font, so the headlines do too (the raw renders load
+# this same file — see test/store_screenshots_test.dart).
+SYSTEM_FONT = "/System/Library/Fonts/SFNS.ttf"
 
-# Sampled from the previous marketing art so the listing keeps its look.
-TOP = (33, 53, 94)
-BOTTOM = (14, 24, 48)
-WARM = (150, 92, 78)      # top-left glow
-COOL = (34, 62, 112)      # bottom-right glow
+# Deep blue ramp behind the light app panel: the app's control blue, darkened,
+# with the orange of the collection bar as the accent.
+TOP = (18, 78, 190)
+BOTTOM = (8, 32, 96)
+GLOW_A = (64, 148, 255)   # top-left glow
+GLOW_B = (20, 56, 150)    # bottom-right glow
 HEADLINE = (255, 255, 255)
-SUBHEAD = (170, 186, 212)
-ACCENT = (243, 118, 32)
+SUBHEAD = (206, 222, 250)
+ACCENT = (255, 149, 0)
 
 # App Store canvases. The raw render for each is exactly these pixels, so the
 # app is shown at true device proportions.
@@ -46,28 +48,37 @@ DEVICES = {
 SHOTS = [
     ("01_ledger", "All your rent in one place",
      "See who has paid and what's pending at a glance"),
-    ("02_unit_detail", "Mark rent paid in one tap",
-     "Deposits, charges and full history for every unit"),
+    ("02_unit_detail", "Rent, bills and deductions",
+     "Electricity, water and deposits on every unit's ledger"),
     ("03_reports", "Know where you stand",
-     "Monthly, quarterly and yearly income summaries"),
+     "Charges, deductions and income by month, quarter or year"),
     ("04_add_unit", "Add a unit in seconds",
-     "Tenant, rent, deposit and lease start date"),
+     "Tenant, rent, deposit and rent start date"),
     ("05_settings", "Built for Nepal",
-     "Bikram Sambat calendar, PIN lock and cloud backup"),
+     "Bikram Sambat dates, Nepali Rupees, PIN lock and backup"),
+]
+
+# The US storefront set (`--market us`): same shots rendered in US Dollars
+# with AD dates, read from store/raw_us/ and written to store/listing_us/.
+SHOTS_US = SHOTS[:4] + [
+    ("05_settings", "Private and backed up",
+     "PIN lock, automatic cloud backup, export any time"),
 ]
 
 
+def _system_font(size, weight):
+    f = ImageFont.truetype(SYSTEM_FONT, size)
+    # Axes: width, optical size, grade, weight.
+    f.set_variation_by_axes([100, min(96, max(17, size)), 400, weight])
+    return f
+
+
 def display_font(size):
-    """Fraunces at its display optical size and heaviest weight."""
-    f = ImageFont.truetype(str(DISPLAY), size)
-    f.set_variation_by_axes([144, 900, 0, 1])  # opsz, wght, soft, wonk
-    return f
+    return _system_font(size, 800)
 
 
-def body_font(size, weight=400):
-    f = ImageFont.truetype(str(BODY), size)
-    f.set_variation_by_axes([weight])
-    return f
+def body_font(size, weight=500):
+    return _system_font(size, weight)
 
 
 def fit(make_font, text, max_width, start, floor=8):
@@ -82,7 +93,7 @@ def fit(make_font, text, max_width, start, floor=8):
 
 
 def background(w, h):
-    """Vertical navy ramp plus the two soft corner glows."""
+    """Vertical blue ramp plus the two soft corner glows."""
     bg = Image.new("RGB", (w, h))
     px = bg.load()
     for y in range(h):
@@ -102,9 +113,8 @@ def background(w, h):
             (w, h), Image.LANCZOS)
         bg.paste(Image.new("RGB", (w, h), color), (0, 0), layer)
 
-    glow(0.10, 0.05, max(w, h) * 0.42, WARM, 150)
-    glow(0.08, 0.62, max(w, h) * 0.30, WARM, 70)
-    glow(0.95, 0.90, max(w, h) * 0.35, COOL, 90)
+    glow(0.10, 0.04, max(w, h) * 0.42, GLOW_A, 120)
+    glow(0.95, 0.92, max(w, h) * 0.36, GLOW_B, 110)
     return bg
 
 
@@ -170,7 +180,13 @@ def compose(device, index, raw_name, headline, subhead):
 
 
 if __name__ == "__main__":
+    import sys
+    shots = SHOTS
+    if sys.argv[1:] == ["--market", "us"]:
+        RAW = ROOT / "store" / "raw_us"
+        OUT = ROOT / "store" / "listing_us"
+        shots = SHOTS_US
     for device in DEVICES:
         print(device)
-        for i, (raw_name, headline, subhead) in enumerate(SHOTS, start=1):
+        for i, (raw_name, headline, subhead) in enumerate(shots, start=1):
             compose(device, i, raw_name, headline, subhead)

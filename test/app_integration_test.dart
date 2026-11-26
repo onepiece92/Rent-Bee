@@ -75,11 +75,21 @@ void main() {
     }
   }
 
-  testWidgets('onboarding gate routes to phone verify, then guest unlock '
+  testWidgets('onboarding gate routes to sign-in, then guest unlock '
       'reaches the home ledger', (tester) async {
     await pumpApp(tester);
-    // Not onboarded → the router parks the user on phone verification.
+    // Not onboarded → the router parks the user on the sign-in screen, which
+    // offers the emailed code and the phone number on every platform.
+    expect(find.text('Sign in to get started'), findsOneWidget);
+    expect(find.text('Use a phone number instead'), findsOneWidget);
+
+    // The phone path is still one tap away, and the way back works.
+    await tester.tap(find.text('Use a phone number instead'));
+    await settle(tester);
     expect(find.text('Verify your phone number to get started'), findsOneWidget);
+    await tester.tap(find.text('Other ways to sign in'));
+    await settle(tester);
+    expect(find.text('Use a phone number instead'), findsOneWidget);
 
     // Unlock via the debug guest path (no Firebase) and the gate opens.
     auth.enterGuestMode();

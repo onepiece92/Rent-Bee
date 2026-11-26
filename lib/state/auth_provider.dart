@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../domain/email.dart';
 import '../domain/test_accounts.dart';
 
 /// Single-owner local lock with a one-time phone identity.
@@ -88,6 +89,7 @@ class AuthProvider extends ChangeNotifier {
   bool _unlocked = false;
   bool _guest = false;
   bool _resettingPin = false;
+  bool _deletingAccount = false;
   int _failures = 0;
   DateTime? _lockedUntil;
 
@@ -150,6 +152,18 @@ class AuthProvider extends ChangeNotifier {
   /// by phone verification for the number already on this device.
   bool get resettingPin => _resettingPin;
 
+  /// True while the owner confirms their identity to delete their account:
+  /// the sign-in screen is shown for the recorded identity, and a successful
+  /// sign-in deletes the account (Firebase only deletes an account that has
+  /// just signed in).
+  bool get deletingAccount => _deletingAccount;
+
+  /// The account can be deleted by a signed-in owner (not the guest session).
+  bool get canDeleteAccount => _phone != null && !_guest;
+
+  /// Either re-verification in progress (PIN reset or account deletion).
+  bool get reverifying => _resettingPin || _deletingAccount;
+
   /// Whether a forgotten PIN can be reset — only for a phone-verified owner
   /// (the debug guest session has no number to verify).
   bool get canResetPin => _phone != null && !_guest && hasPin;
@@ -167,11 +181,18 @@ class AuthProvider extends ChangeNotifier {
   /// device, so a real owner's account never offers it.
   bool get canGenerateDemoData => _guest || isTestAccount;
 
-  /// True once the owner's phone number has been verified via Firebase OTP.
+  /// True once the owner has signed in — by SMS code, Google, Apple or an
+  /// emailed code. (Named for the first of those; see [phone].)
   bool get phoneVerified => _phone != null;
 
-  /// The verified phone number in E.164 form (e.g. `+9779801234501`), or null.
+  /// The identity the owner signed in with: an E.164 phone number (e.g.
+  /// `+9779801234501`) for the SMS sign-in, otherwise a lower-cased email
+  /// address. Null before sign-in.
   String? get phone => _phone;
+
+  /// Whether the recorded identity is an email rather than a phone number —
+  /// which decides how a forgotten PIN is re-verified.
+  bool get signedInWithEmail => isEmailIdentity(_phone);
 
   /// The Firebase uid captured at verification, or null. Retained for a future
   /// cloud-sync/backup feature; day-to-day unlock does not use it.
@@ -275,6 +296,7 @@ class AuthProvider extends ChangeNotifier {
     _unlocked = false;
     _guest = false;
     _resettingPin = false;
+    _deletingAccount = false;
     notifyListeners();
   }
 
@@ -363,9 +385,10 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Forgot PIN, step 2: [verifiedPhone] has just passed OTP verification.
-  /// Only the number this device was set up with may clear the PIN — anyone
-  /// else holding the phone cannot swap in their own number to get past the
+  /// Forgot PIN, step 2: [verifiedPhone] (a phone number or an email — the
+  /// same kind of identity as [phone]) has just been verified again.
+  /// Only the identity this device was set up with may clear the PIN — anyone
+  /// else holding the phone cannot swap in their own account to get past the
   /// lock. On success the PIN is removed and the owner sets a new one; the
   /// ledger is untouched. Returns false (and changes nothing) otherwise.
   Future<bool> completePinReset(String verifiedPhone, String uid) async {
@@ -380,9 +403,37 @@ class AuthProvider extends ChangeNotifier {
     return true;
   }
 
+  /// Delete account, step 1 (after the typed confirmation): show sign-in for
+  /// the recorded identity. Nothing is deleted yet; [cancelAccountDeletion]
+  /// returns to the app unchanged.
+  void startAccountDeletion() {
+    if (!canDeleteAccount || _deletingAccount) return;
+    _deletingAccount = true;
+    notifyListeners();
+  }
+
+  void cancelAccountDeletion() {
+    if (!_deletingAccount) return;
+    _deletingAccount = false;
+    notifyListeners();
+  }
+
+  /// Whether [verifiedIdentity] is the identity this device is signed in as —
+  /// only the owner's own account may be deleted from here.
+  bool isOwnIdentity(String verifiedIdentity) =>
+      _phone != null && verifiedIdentity == _phone;
+
+  /// Delete account, last step, once the account and its data are gone:
+  /// forget the identity and the PIN and return to first-run sign-in.
+  Future<void> finishAccountDeletion() async {
+    _deletingAccount = false;
+    await resetIdentity();
+  }
+
   void lock() {
     _unlocked = false;
     _resettingPin = false;
+    _deletingAccount = false;
     notifyListeners();
   }
 
@@ -390,9 +441,9 @@ class AuthProvider extends ChangeNotifier {
   /// and unlocks straight into the app. Intentionally **not persisted**: a cold
   /// start drops back to phone onboarding. Only ever invoked from a debug-gated
   /// button (see [PhoneLoginScreen]).
-  void enterGuestMode() {
+  void enterGuestMode({String label = 'Guest (test)'}) {
     _guest = true;
-    _phone = 'Guest (test)';
+    _phone = label;
     _unlocked = true;
     notifyListeners();
   }

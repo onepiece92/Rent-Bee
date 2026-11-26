@@ -8,5 +8,11 @@
 	     Paired with UIBackgroundModes=remote-notification in Info.plist. -->
 	<key>aps-environment</key>
 	<string>development</string>
+	<!-- Sign in with Apple, required wherever Google sign-in is offered
+	     (App Review guideline 4.8). -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
 </dict>
 </plist>

@@ -372,6 +372,15 @@ column on payments); both upgrades are additive.
 - Tapping a unit on a month report first switches the Ledger to that month, so the sheet edits the right month (same rule as B07).
 - **Tests:** `test/charges_reports_test.dart` (7 tests); `test/large_text_test.dart` still passes at 2× text.
 
+### I03 ✅ Delete account (25 Nov 2026)
+
+- **Why:** Apple requires apps that create accounts to let people delete them in the app (guideline 5.1.1(v)); none existed.
+- **Where:** Settings → Security → **Delete account** (hidden in the debug guest session).
+- **Flow:** type DELETE → sign in once more as the same account (phone, Google or Apple; Firebase only deletes an account that has just signed in) → the app stops sync, deletes the cloud ledger (`users/{uid}` and its units, payments and charges), revokes the Sign in with Apple token if Apple was used, deletes the Firebase account, wipes this device, and returns to first-run sign-in. "Cancel, keep my account" on the sign-in screen backs out with nothing changed. Signing in as a different account is refused.
+- **Safety:** the account is deleted only after its cloud data is gone; if the account deletion fails, this device keeps its ledger so the owner can back up or retry. Sync cannot restart mid-deletion.
+- **Note:** revoking the Apple token needs the Apple provider's Services ID and key set in Firebase; if missing, the revoke fails quietly and the rest still completes.
+- **Tests:** `test/account_deletion_test.dart` (8 tests).
+
 ## Earlier fixes this session (before the queue)
 
 | When | What was fixed |

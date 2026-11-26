@@ -67,9 +67,13 @@ class _LoginScreenState extends State<LoginScreen> {
       (ctx) => GlassDialog(
         title: 'Reset your PIN?',
         content: Text(
-          'We will text a code to ${auth.phone} to confirm it is you, then '
-          'you can choose a new PIN. Your units and payments are not '
-          'changed.',
+          auth.signedInWithEmail
+              ? 'Sign in again as ${auth.phone} to confirm it is you, then '
+                  'you can choose a new PIN. Your units and payments are not '
+                  'changed.'
+              : 'We will text a code to ${auth.phone} to confirm it is you, '
+                  'then you can choose a new PIN. Your units and payments are '
+                  'not changed.',
           textAlign: TextAlign.center,
         ),
         actions: [

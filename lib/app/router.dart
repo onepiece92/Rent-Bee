@@ -25,6 +25,11 @@ GoRouter buildRouter(AuthProvider auth) {
     redirect: (context, state) {
       final loc = state.matchedLocation;
       final atGate = loc == '/login' || loc == onboardPhone || loc == onboardPin;
+      // Deleting the account: confirm the identity on the sign-in screen,
+      // even though the app is unlocked.
+      if (auth.deletingAccount) {
+        return loc == onboardPhone ? null : onboardPhone;
+      }
       if (auth.unlocked) return atGate ? '/' : null;
       // Not unlocked — route to the earliest incomplete onboarding step.
       // A forgotten PIN is reset by verifying the recorded number again.

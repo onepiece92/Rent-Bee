@@ -33,8 +33,14 @@ class LedgerProvider extends ChangeNotifier {
   /// Defaults to "off" for callers that don't escalate (tests).
   final double Function() _raisePercent;
 
+  /// Called after a payment is recorded with [markPaid] (not on edits or
+  /// undo) — the hook the store-rating prompt counts from.
+  final void Function()? onPaymentRecorded;
+
   LedgerProvider(this.repo,
-      {required BsMonth initialMonth, double Function()? raisePercent})
+      {required BsMonth initialMonth,
+      double Function()? raisePercent,
+      this.onPaymentRecorded})
       : _month = initialMonth,
         _raisePercent = raisePercent ?? (() => 0);
 
@@ -244,6 +250,7 @@ class LedgerProvider extends ChangeNotifier {
         note: note);
     _hold(unit.id);
     await refresh(keepOrder: true);
+    onPaymentRecorded?.call();
   }
 
   void _hold(int unitId) {

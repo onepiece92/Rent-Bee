@@ -1,7 +1,7 @@
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
 
 import '../firebase_options.dart';
 
@@ -93,7 +93,15 @@ class PhoneAuthService {
           onError(_message(e));
         }
       },
-      verificationFailed: (FirebaseAuthException e) => onError(_message(e)),
+      verificationFailed: (FirebaseAuthException e) {
+        // `internal-error` hides the real reason in the native error; debug
+        // runs print everything the plugin hands over.
+        if (kDebugMode) {
+          debugPrint('[phone-auth] verificationFailed code=${e.code} '
+              'message=${e.message} full=$e\n${e.stackTrace}');
+        }
+        onError(_message(e));
+      },
       codeSent: (String verificationId, int? _) => onCodeSent(verificationId),
       codeAutoRetrievalTimeout: (String verificationId) =>
           onTimeout?.call(verificationId),

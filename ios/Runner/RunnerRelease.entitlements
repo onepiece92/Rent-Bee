@@ -7,5 +7,11 @@
 	     provisioning profile will not match. -->
 	<key>aps-environment</key>
 	<string>production</string>
+	<!-- Sign in with Apple, required wherever Google sign-in is offered
+	     (App Review guideline 4.8). -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
 </dict>
 </plist>

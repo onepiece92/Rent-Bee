@@ -55,9 +55,36 @@ void main() {
   });
 
   group('currency', () {
-    test('defaults to NPR regardless of install status', () async {
+    test('an untouched existing install defaults to NPR', () async {
       expect((await make()).currency, Currency.npr);
-      expect((await make(const {}, false)).currency, Currency.npr);
+    });
+
+    test('a fresh install starts in NPR in Nepal and USD elsewhere', () async {
+      Future<Currency> fresh({required bool inNepal}) async {
+        SharedPreferences.setMockInitialValues({});
+        return SettingsProvider(await SharedPreferences.getInstance(),
+                isExistingInstall: false, inNepal: inNepal)
+            .currency;
+      }
+
+      expect(await fresh(inNepal: true), Currency.npr);
+      expect(await fresh(inNepal: false), Currency.usd);
+    });
+
+    test('an existing install keeps NPR wherever the device is', () async {
+      SharedPreferences.setMockInitialValues({});
+      final s = SettingsProvider(await SharedPreferences.getInstance(),
+          isExistingInstall: true, inNepal: false);
+      expect(s.currency, Currency.npr);
+    });
+
+    test('the fresh-install USD default survives the second launch', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      SettingsProvider(prefs, isExistingInstall: false, inNepal: false);
+      final second =
+          SettingsProvider(prefs, isExistingInstall: true, inNepal: true);
+      expect(second.currency, Currency.usd);
     });
 
     test('setCurrency persists, notifies, and pushes to the cloud', () async {

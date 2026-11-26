@@ -127,12 +127,24 @@ class SettingsScreen extends StatelessWidget {
                   leading: IconTile(icon: Icons.logout_rounded, color: sys.red),
                   title: 'Sign out',
                   subtitle: auth.phone == null
-                      ? 'Remove this device and re-verify your phone'
-                      : 'Signed in as ${auth.phone} · tap to re-verify',
+                      ? 'Remove this device and sign in again'
+                      : 'Signed in as ${auth.phone} · tap to sign in again',
                   destructive: true,
                   chevron: true,
                   onTap: () => _signOut(context),
                 ),
+                if (auth.canDeleteAccount) ...[
+                  const Hairline(inset: _rowInset),
+                  ListRow(
+                    leading: IconTile(
+                        icon: Icons.person_remove_outlined, color: sys.red),
+                    title: 'Delete account',
+                    subtitle: 'Permanently delete your account and all its data',
+                    destructive: true,
+                    chevron: true,
+                    onTap: () => _deleteAccount(context),
+                  ),
+                ],
               ],
             ),
           ),
@@ -581,6 +593,30 @@ class SettingsScreen extends StatelessWidget {
     if (ok != true) return;
     await ledger.eraseAllData();
     showToastOn(overlay, 'All data erased');
+  }
+
+  /// Deletes the account (App Store guideline 5.1.1(v)): a typed DELETE,
+  /// then the owner signs in again as themselves — Firebase only deletes an
+  /// account that has just signed in — and the deletion runs from there
+  /// (see PhoneLoginScreen). Backing out of the sign-in changes nothing.
+  Future<void> _deleteAccount(BuildContext context) async {
+    final auth = context.read<AuthProvider>();
+    final ok = await showGlassDialog<bool>(
+      context,
+      (_) => TypedConfirmDialog(
+        title: 'Delete your account?',
+        message: 'This permanently deletes your Rent Bee account and '
+            'everything in it: every unit, payment, charge and deduction, on '
+            'this phone, in the cloud, and on every other device signed in to '
+            '${auth.phone}. This cannot be undone.\n\n'
+            'Want a copy first? Cancel and use Back up to file.\n\n'
+            'Next, you will sign in once more to confirm it is you.',
+        word: 'DELETE',
+        confirmLabel: 'Continue',
+      ),
+    );
+    if (ok != true) return;
+    auth.startAccountDeletion(); // go_router shows the sign-in to confirm
   }
 
   /// Signs out: clears the verified phone identity and the PIN, sending the

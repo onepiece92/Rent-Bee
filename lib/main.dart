@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/router.dart';
 import 'app/theme.dart';
+import 'data/review_prompter.dart';
 import 'data/database.dart';
 import 'data/ledger_repository.dart';
 import 'data/sync_bootstrap.dart';
@@ -115,10 +116,12 @@ class _UnitLedgerAppState extends State<UnitLedgerApp>
 
   late final AuthProvider _auth = widget.auth;
   late final SettingsProvider _settings = widget.settings;
+  late final ReviewPrompter _reviewPrompter = ReviewPrompter(widget.prefs);
   late final LedgerProvider _ledger =
       LedgerProvider(widget.repo,
           initialMonth: _initialMonth(),
-          raisePercent: () => widget.settings.annualRaisePercent)
+          raisePercent: () => widget.settings.annualRaisePercent,
+          onPaymentRecorded: _reviewPrompter.paymentRecorded)
         ..init(annualRaisePercent: widget.settings.annualRaisePercent);
   late final _router = buildRouter(_auth);
   final SyncStatusController _syncStatus = SyncStatusController();
@@ -202,8 +205,10 @@ class _UnitLedgerAppState extends State<UnitLedgerApp>
   Future<void> _syncLifecycle() async {
     final repo = widget.repo;
     // Start: unlocked, real owner (not guest), not already running/starting.
+    // Never while the account is being deleted: sync is stopped on purpose.
     if (_auth.unlocked &&
         !_auth.isGuest &&
+        !_auth.deletingAccount &&
         repo.sync == null &&
         !_syncStarting) {
       _syncStarting = true;

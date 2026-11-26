@@ -128,6 +128,10 @@ void main() {
       expect(find.text('Delete every unit and payment, on all your devices'),
           findsOneWidget);
 
+      // Bring the row clear of the floating tab bar before tapping.
+      await t.ensureVisible(find.text('Generate demo data'));
+      await t.drag(find.byType(Scrollable).first, const Offset(0, -200));
+      await t.pump(const Duration(milliseconds: 300));
       await t.tap(find.text('Generate demo data'));
       await t.pump(const Duration(milliseconds: 400));
       expect(find.text('Type REPLACE to confirm.'), findsOneWidget);

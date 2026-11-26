@@ -5,6 +5,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../domain/bs_calendar.dart';
 import '../domain/money.dart';
 
+/// Whether the device clock is on Nepal time (UTC+05:45, used nowhere else).
+bool deviceIsInNepal([DateTime? now]) =>
+    (now ?? DateTime.now()).timeZoneOffset ==
+    const Duration(hours: 5, minutes: 45);
+
 /// App-wide preferences, persisted so they survive restarts:
 ///   • the calendar the UI labels dates in (BS vs AD),
 ///   • the currency the ledger is denominated in (NPR vs USD), and
@@ -53,7 +58,14 @@ class SettingsProvider extends ChangeNotifier {
   /// install reads as familiar dates immediately. An **explicitly stored**
   /// value always wins over this flag either way — this only decides the
   /// very first, never-touched-the-toggle case.
-  SettingsProvider(this._prefs, {bool isExistingInstall = true})
+  ///
+  /// The currency default follows the same rule: an existing install keeps
+  /// NPR, and so does a fresh install in Nepal; a fresh install anywhere else
+  /// starts in USD. [inNepal] defaults to the device clock's UTC offset —
+  /// +05:45 is used by Nepal alone, and unlike the device language it is
+  /// right for the many Nepali phones set to US English.
+  SettingsProvider(this._prefs,
+      {bool isExistingInstall = true, bool? inNepal})
       : _calendar = switch (_prefs.getString(_kCalendar)) {
           final v? when v == CalendarMode.ad.name => CalendarMode.ad,
           final v? when v == CalendarMode.bs.name => CalendarMode.bs,
@@ -61,7 +73,9 @@ class SettingsProvider extends ChangeNotifier {
         },
         _currency = Currency.values.firstWhere(
           (c) => c.name == _prefs.getString(_kCurrency),
-          orElse: () => Currency.npr,
+          orElse: () => isExistingInstall || (inNepal ?? deviceIsInNepal())
+              ? Currency.npr
+              : Currency.usd,
         ),
         _annualRaisePercent =
             _prefs.getDouble(_kRaisePercent) ?? _defaultRaisePercent,
@@ -75,6 +89,11 @@ class SettingsProvider extends ChangeNotifier {
     // install silently became BS on the second launch (buglog B11).
     if (!_prefs.containsKey(_kCalendar)) {
       _prefs.setString(_kCalendar, _calendar.name);
+    }
+    // Same for the currency default, which would otherwise flip from USD to
+    // NPR on the second launch, or with the owner's travels.
+    if (!_prefs.containsKey(_kCurrency)) {
+      _prefs.setString(_kCurrency, _currency.name);
     }
   }
 

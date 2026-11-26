@@ -107,7 +107,19 @@
 				<string>app-1-1005145227491-ios-2686f67bbe9afb0e8c85d6</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>google-sign-in</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.1005145227491-nldr27l8gdjfavskqmaqvunigoj0sjbt</string>
+			</array>
+		</dict>
 	</array>
+	<key>GIDClientID</key>
+	<string>1005145227491-nldr27l8gdjfavskqmaqvunigoj0sjbt.apps.googleusercontent.com</string>
 	<!-- Firebase phone auth uses a silent remote notification to verify the app. -->
 	<key>UIBackgroundModes</key>
 	<array>

@@ -36,6 +36,10 @@ void main() {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
 
   final enabled = Platform.environment['RENTBEE_SHOTS'] == '1';
+  // RENTBEE_SHOTS_MARKET=us renders the US storefront set: US Dollars, AD
+  // dates and US-scale rents, written to store/raw_us/ instead of store/raw/.
+  final us = Platform.environment['RENTBEE_SHOTS_MARKET'] == 'us';
+  final rawDir = us ? 'raw_us' : 'raw';
 
   // `flutter test` maps every font family to the blank test font, so without
   // this every glyph — text and Material icons alike — renders as a box.
@@ -76,7 +80,11 @@ void main() {
 
   setUp(() async {
     // Pin the escalation off so seeded rents don't drift with the real clock.
-    SharedPreferences.setMockInitialValues({'annual_raise_pct': 0.0});
+    SharedPreferences.setMockInitialValues({
+      'annual_raise_pct': 0.0,
+      if (us) 'currency': 'usd',
+      if (us) 'calendar_mode': 'ad',
+    });
     prefs = await SharedPreferences.getInstance();
     db = AppDatabase.forTesting(NativeDatabase.memory());
     repo = LedgerRepository(db);
@@ -88,6 +96,23 @@ void main() {
   /// Demo ledger: a believable mix of paid and pending across five units, so
   /// the summary card, the filter chips and both card states all have content.
   Future<void> seed() async {
+    // Utility charges for the current month (electricity, water, other), so
+    // the unit sheet and the Reports "Charges & deductions" card have content.
+    final charges = us
+        ? const <String, (int, int, int)>{
+            'A-01': (86, 40, 0),
+            'A-02': (112, 40, 25),
+            'A-03': (64, 40, 0),
+            'B-02': (138, 40, 0),
+            'C-01': (205, 60, 25),
+          }
+        : const <String, (int, int, int)>{
+            'A-01': (1850, 300, 0),
+            'A-02': (2400, 300, 500),
+            'A-03': (1200, 300, 0),
+            'B-02': (3100, 300, 0),
+            'C-01': (4650, 600, 500),
+          };
     Future<void> add(String code, String tenant, String business, int rent,
         int deposit, bool paid) async {
       final id = await repo.createUnit(UnitsCompanion.insert(
@@ -98,6 +123,17 @@ void main() {
         depositAmount: Value(deposit),
         startedOn: Value(DateTime(2024, 6, 15)),
       ));
+      final m0 = bsYearMonth(DateTime.now());
+      final c = charges[code];
+      if (c != null) {
+        await repo.setCharges(id, m0.year, m0.month,
+            electricity: c.$1, water: c.$2, service: c.$3);
+      }
+      if (code == 'A-01') {
+        await repo.setDeduction(id, m0.year, m0.month,
+            amount: us ? 120 : 1500,
+            note: us ? 'Supplies for the building' : '2 sacks rice');
+      }
       if (!paid) return;
       final unit =
           await (db.select(db.units)..where((u) => u.id.equals(id))).getSingle();
@@ -108,14 +144,25 @@ void main() {
     }
 
     // Eight units so the list fills an iPad canvas as well as a phone.
-    await add('A-01', 'Maya Tamang', 'Grocery', 15000, 30000, true);
-    await add('A-02', 'Sushant Regmi', 'Home', 22000, 44000, true);
-    await add('A-03', 'Nabin Karki', 'Mobile repair', 14000, 28000, true);
-    await add('B-01', 'Bikash Shrestha', 'Tailor', 12500, 25000, false);
-    await add('B-02', 'Anita Gurung', 'Salon', 18000, 36000, false);
-    await add('B-03', 'Sabina Rai', 'Boutique', 16500, 33000, true);
-    await add('C-01', 'Ramesh Thapa', 'Cafe', 26000, 52000, true);
-    await add('C-02', 'Deepak Magar', 'Hardware', 20000, 40000, true);
+    if (us) {
+      await add('A-01', 'Maria Alvarez', 'Grocery', 1450, 2900, true);
+      await add('A-02', 'James Carter', 'Apartment', 1900, 1900, true);
+      await add('A-03', 'Emily Nguyen', 'Studio', 1250, 1250, true);
+      await add('B-01', 'David Kim', 'Barber shop', 2100, 4200, false);
+      await add('B-02', 'Sarah Johnson', 'Salon', 2400, 4800, false);
+      await add('B-03', 'Olivia Brown', 'Boutique', 2250, 4500, true);
+      await add('C-01', 'Michael Davis', 'Cafe', 3200, 6400, true);
+      await add('C-02', 'Daniel Wilson', 'Duplex', 2750, 2750, true);
+    } else {
+      await add('A-01', 'Maya Tamang', 'Grocery', 15000, 30000, true);
+      await add('A-02', 'Sushant Regmi', 'Home', 22000, 44000, true);
+      await add('A-03', 'Nabin Karki', 'Mobile repair', 14000, 28000, true);
+      await add('B-01', 'Bikash Shrestha', 'Tailor', 12500, 25000, false);
+      await add('B-02', 'Anita Gurung', 'Salon', 18000, 36000, false);
+      await add('B-03', 'Sabina Rai', 'Boutique', 16500, 33000, true);
+      await add('C-01', 'Ramesh Thapa', 'Cafe', 26000, 52000, true);
+      await add('C-02', 'Deepak Magar', 'Hardware', 20000, 40000, true);
+    }
   }
 
   // The shell runs a forever background animation + a carousel timer, so
@@ -142,14 +189,15 @@ void main() {
         fontFamily: shotFontFamily));
     await t.pump();
     await t.pump(const Duration(milliseconds: 100));
-    auth.enterGuestMode();
+    // A believable identity for the Settings shot instead of the guest label.
+    auth.enterGuestMode(label: 'you@example.com');
     await settle(t);
   }
 
   Future<void> shot(WidgetTester t, String device, String name) async {
     await expectLater(
       find.byType(UnitLedgerApp),
-      matchesGoldenFile('../store/raw/$device/$name.png'),
+      matchesGoldenFile('../store/$rawDir/$device/$name.png'),
     );
   }
 
@@ -179,7 +227,7 @@ void main() {
         await boot(t, pixels, dpr);
         // Tapping a ledger card opens UnitDetailSheet (deposit, charges,
         // payment history) — see home_screen.dart.
-        await t.tap(find.text('Maya Tamang'));
+        await t.tap(find.text(us ? 'Maria Alvarez' : 'Maya Tamang'));
         await settle(t, 16);
         await shot(t, device, '02_unit_detail');
       }, skip: !enabled);

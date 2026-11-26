@@ -66,6 +66,10 @@ class DefaultFirebaseOptions {
     messagingSenderId: '1005145227491',
     projectId: 'rent-bee-498712',
     storageBucket: 'rent-bee-498712.firebasestorage.app',
+    androidClientId:
+        '1005145227491-leo27qa229jo8h7l5iptm35mj9hbpdra.apps.googleusercontent.com',
+    iosClientId:
+        '1005145227491-nldr27l8gdjfavskqmaqvunigoj0sjbt.apps.googleusercontent.com',
     iosBundleId: 'com.brandbuilder.rentbee',
   );
   static const FirebaseOptions macos = FirebaseOptions(

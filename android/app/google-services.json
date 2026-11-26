@@ -12,7 +12,28 @@
           "package_name": "com.brandbuilder.rentbee"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "1005145227491-leo27qa229jo8h7l5iptm35mj9hbpdra.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.brandbuilder.rentbee",
+            "certificate_hash": "cf00c49941fce37982dfd986d11c79e8d2949e90"
+          }
+        },
+        {
+          "client_id": "1005145227491-uhc4ijs8iqh47pi2v40spjekumcmd13v.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.brandbuilder.rentbee",
+            "certificate_hash": "cf0352fb999277937df2cc625ee61bd59997efec"
+          }
+        },
+        {
+          "client_id": "1005145227491-7d4h1hqd8pgm6gildrs6as8icn7ggujd.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyC5aXcHLfPjCDQxj_fYU1cT6gOOeVj_ZsM"
@@ -20,26 +41,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
-        }
-      }
-    },
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:1005145227491:android:e2d2238ab440c4188c85d6",
-        "android_client_info": {
-          "package_name": "com.rentbee.rent_bee"
-        }
-      },
-      "oauth_client": [],
-      "api_key": [
-        {
-          "current_key": "AIzaSyC5aXcHLfPjCDQxj_fYU1cT6gOOeVj_ZsM"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1005145227491-7d4h1hqd8pgm6gildrs6as8icn7ggujd.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1005145227491-nldr27l8gdjfavskqmaqvunigoj0sjbt.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.brandbuilder.rentbee"
+              }
+            }
+          ]
         }
       }
     }
